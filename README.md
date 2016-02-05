@@ -34,7 +34,7 @@ Digital output channels are specified by letter, starting with `A`.  Analog outp
 
 Teensy Stimulus understands durations given in either decimal numbers or numbers packed into 6-bit chunks (base 64).  If the digits `0` through `9` are used, this is interpreted as a decimal number of milliseconds, up to 8 digits long and terminated with `$`.  If the ASCII digits `;` (number 59, hex 0x3B) through `z` (number 122, hex 0x7A) are used, this must be 5 characters long and is interpreted as a base 64 number with the value of the digit equal to the ASCII number minus 59 (i.e. `c - ';'` where `c` is the character), expressed in tenths of milliseconds (hundreds of microseconds).  Values over 1,000,000,000 (i.e. `vagc;`) are not valid, even though `zzzzz` = 1,073,741,823 can formally be represented.
 
-One exception is the specifying the period of analog waves.  Here, the period is given in tens of microseconds (decimal format) or microseconds (base 64 format).  The minimum period is `100$` or `;;;<_`.
+One exception is the specifying the period of analog waves.  Here, the period is given in tens of microseconds (decimal format) or microseconds (base 64 format).  The minimum period is `100$` or `;;;Jc`.
 
 Other numbers use either a decimal text format or the same base 64 encoding.
 
@@ -95,21 +95,25 @@ Finally, if you wish to set a single channel and run it at once, use the `!` com
 
 If a protocol is already running, it will be terminated and this one will start running instead.
 
+### Error States
+
+The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters one by one into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~?` which will report the error state (as `~!abcd` where `abcd` contains some information about what went wrong), and for `~.` which will reset the state.  The error can still be read out until some other command is executed, at which point the error information will be cleared.
+
 ### Executing and Querying a Stimulation Protocol
 
-To run a stimulation protocol on all defined channels, send the command `~!`.
+To run a stimulation protocol on all defined channels, send the command `~!`.  To run on only a single defined channel, send the command `~A!`.  More channels may not be started until the protocol on that channel has ended.
 
 To terminate a stimulation protocol in progress, send the command `~.`.  To terminate a single channel while leaving any others still running, use `~A.`.
 
-When a stimulation protocol ends, either because of termination or running out of time, it is marked for deletion but isn't actually deleted until new commands are sent to define stimulus trains.  To recover the previous stimulation protocol, send the command `."`.  This must be sent before any new stimuli are defined; otherwise, all will be cleared.
+When a stimulation protocol ends, either because of termination or running out of time, it is marked for deletion but isn't actually deleted until new commands are sent to define stimulus trains.  To recover the previous stimulation protocol, send the command `."`.  This must be sent before any new stimuli are defined; otherwise, all will be cleared.  This must also be done after running with `~A!`.
 
-To ask the board to tell what time point it is at, send the command `~?`.  It will respond with `~<duration>` where duration is specified in tenths of microseconds in base-64 format.  If it has not yet been started or has already finished, it will return `~zzzzz`.
+To ask the board to tell what time point it is at, send the command `~?`.  It will respond with `~<duration>` where duration is specified in tenths of microseconds in base-64 format.  If it has not yet been started or has already finished, it will return `~zzzzz`.  If the system has encountered an error,it will return `~!` followed by four characters that may give some clue as to what went wrong.
 
 To query the state machine that runs an individual channel, send the command `~A?` for channel `A` (likewise for the others).  The board will respond with the protocol it is running, in the same format used to set the channels, followed by four `+` or `-` characters.
 
 The first character indicates whether that channel is running at all (`+` = yes, `-` = no).  The second indicates whether it a stimulus is active or not (`+` = yes, `-` = no).  The third indicates whether a pulse is active within a stimulus (`+` = yes, `-` = no; this is always `+` during a waveform unless part of a final half-wave is being skipped).  The fourth indicates whether there is another stimulus train after this one completes (`+` = yes, `-` = no).  The response is thus 36 characters long: the `~` message start symbol, 6 5-character durations, one character for shape, and 4 `+` or `-` flags.
 
-The Teensy Stimulus board will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A:(` (for channel `A`).  It will respond with 8 30-bit numbers: number of stimuli that should have started, number that were missed, number of pulses that should have started, number that were missed, max error (in microseconds) for starting a pulse, max error (in microseconds) for ending a pulse, total number of microseconds off for starting pulses, total number off for ending pulses.  For analog outputs, the difference between the target time for changing voltage and the actual time is reported instead of starting edge values, and there are no stats for ending edges.  This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this afterwards or during debugging.
+The Teensy Stimulus board will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A#` (for channel `A`).  It will respond with 8 30-bit numbers: number of stimuli that should have started, number that were missed, number of pulses that should have started, number that were missed, max error (in microseconds) for starting a pulse, max error (in microseconds) for ending a pulse, total number of microseconds off for starting pulses, total number off for ending pulses.  For analog outputs, the difference between the target time for changing voltage and the actual time is reported instead of starting edge values, and there are no stats for ending edges.  This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this afterwards or during debugging.
 
 ## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
 
