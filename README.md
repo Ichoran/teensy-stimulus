@@ -4,7 +4,7 @@ Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 0.1 milliseconds, a maximum protocol length of 1,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
+Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 1,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
 
 ## Constructing Stimuli
 
@@ -76,7 +76,9 @@ An example for each parameter is given below:
 | sinusoidal | `s` | none | analog | `~@s` | Analog output will be sinusoidal (overrides `r`) |
 | triangular | `r` | none | analog | `~@r` | Analog output will be triangular (overrides `s`) |
 
-Note that in analog outputs, only an integer number of wave half-periods are executed within a stimulus on time.  If a half-wave would not complete by the time a stimulus was to turn off, that half-wave will be skipped.  This is done to avoid high-frequency artifacts as an output suddenly vanishes.
+Note that in analog outputs, only an integer number of wave half-periods are executed within the on time of a stimulus.  If a half-wave would not complete by the time a stimulus was to turn off, that half-wave will be skipped.  This is done to avoid high-frequency artifacts as an output suddenly vanishes.  Note also that analog outputs have a maximum range of 0-3.3V, so "off" will be 1.65V.  If you connect a 10 uF capacitor in-line with the output pin, you should effectively remove the 1.65V offset.  Note also that the maximum current is very low; an amplifier is needed to run anything real.
+
+Note also that very short stimuli may fail to complete as expected.  The software is designed to have a timing accuracy of around 100 microseconds.  Setting a pulse on duration of 5 microseconds is possible, but unlikely to produce the desired output.
 
 #### Complete Stimulus Train Specification
 
@@ -113,7 +115,7 @@ If a protocol is already running, it will be terminated and this one will start 
 
 ### Error States
 
-The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters one by one into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~$` which will return `~X` if there is an error and `~$` if not; for `~?` which will report the error state (as `~!abcd` where `abcd` contains some information about what went wrong); and for `~.` which will reset the state.  The error can still be read out until some other command is executed, at which point the error information will be cleared.
+The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~$` which will return `~X` if there is an error and `~$` if not; for `~?` which will report the error state (as `~!abcdefghijkl$` where `abcdefghijkl` contains some information about what went wrong); and for `~.` which will reset the state.  The error can still be read out until some other command is executed, at which point the error information will be cleared.
 
 ### Executing and Querying a Stimulation Protocol
 
@@ -170,7 +172,7 @@ TODO: write this.
 
 | Command | Command Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Check errors | `$` | 2 chars: `~$` if okay, `~X` if error. |
+| Check errors | `$` | 2 chars: `~$` if okay, `~X` if error. | Note that `~$` is effectively the empty command. |
 | Abort        | `.` | None | Stops any running protocol.  Also clears error state. |
 | Reset        | `"` | None | Restores previous protocol if applied after a completed run or abort.  Otherwise sets error state. |
 | Run          | `!` | None | Starts protocol running.  Sets error state if there is no protocol or one is running. |
