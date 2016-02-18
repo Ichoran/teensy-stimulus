@@ -24,6 +24,10 @@ int digi[DIG];
 
 int16_t wave[256];
 
+#define CLIP(i, lo, hi) ((i < lo) ? lo : ((i > hi) ? hi : i))
+#define HEXTRI(i) (i + ((i < 10) ? '0' : '7'))
+#define DEHEXT(i) (i - ((i > '9') ? '7' : '0'))
+
 struct Dura {
   int s;
   int u;
@@ -60,23 +64,45 @@ Channel channels[CHAN];
 int errormsgN = 12;
 byte errormsg[12];
 
+int whoamiN = 0;
+byte whoami[24];
+
+int bufi;
+int bufN = 63;
 char buf[63];
 
 int tick;               // Last clock tick (microseconds), used to update time
 Dura global_clock;      // Counts up from the start of protocols
 volatile int running;   // Number of running channels.  0 = setup, values < 0 = error state
 
+Dura blinking;
+volatile bool blink_is_on;
+
 void read_my_eeprom() {
   // Make sure the EEPROM corresponds to the expected device
+  whoami[0] = '~';
   int i = 0;
-  for (; i < eepsigN; i++) if (EEPROM.read(i) != eepsig[i]) {
-    char msg[] = "wrong-ver";
-    running = -1;
-    int j = 0;
-    for (; j < 9; j++) errormsg[j] = msg[j];
-    for (; j < errormsgN; j++) errormsg[j] = ' ';
-    return;
+  for (; i < eepsigN; i++) {
+    byte c = EEPROM.read(i);
+    if (c != eepsig[i]) {
+      char msg[] = "wrong-ver";
+      running = -2;
+      int j = 0;
+      for (; j < 9; j++) errormsg[j] = msg[j];
+      for (; j < errormsgN; j++) errormsg[j] = ' ';
+      return;
+    }
+    else whoami[i+1] = c;
   }
+  for (; i < eepsigN + 12; i++) {
+    byte c = EEPROM.read(i);
+    if (c == 0) break;
+    whoami[i+1] = c;
+  }
+  whoami[++i] = '$';
+  whoami[++i] = 0;
+  whoamiN = i;
+  i = eN;
 
   // Read wave number if it's there
   if (EEPROM.read(i++) != 0) {
@@ -111,6 +137,7 @@ void init_wave() {
 void init_pins() {
   if (waveN > 0) analogWriteResolution(12);
   pinMode(LED_PIN, OUTPUT);
+  blink_is_on = false;
   for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
 }
 
@@ -138,6 +165,7 @@ void diminish_by(Dura *x, Dura v) {
 
 // Setup runs once at reset / power on
 void setup() {
+  running = 0;
   read_my_eeprom();
   init_pins();
   Serial.begin(115200);
@@ -146,6 +174,10 @@ void setup() {
   for (int i = 0; i < PROT; i++) protocols[i].next = 255;
   for (int j = 0; j < CHAN; j++) channels[j].protocol = 255;
   running = 0;
+  blinking.s = 0;
+  blinking.u = 1000;   // 1 ms delay before doing anything
+  tick = micros();
+  bufi = 0;
 }
 
 void turn_off(Channel *ci) {
@@ -160,22 +192,134 @@ void turn_on(Channel *ci) {
   else digitalWrite(ci->pin, LOW);
 }
 
+void halt_channels() {
+  // TODO--do something
+}
+
+void six_in(int value, byte *target) {
+  for (int i = 5; i >= 0; i--, value /= 10) target[i] = '0'+(value%10);
+}
+
+volatile int count_me;
+
+void shiftbuf(int n) {
+  if (n > 0) {
+    for (int i = n, j = 0; i < bufi; i++, j++) buf[j] = buf[i];
+    bufi = (n >= bufi) ? 0 : bufi - n;
+  }
+}
+
+void start_running() {
+  shiftbuf(2);  // TODO--actually do something
+}
+
+void report_errors() {
+  shiftbuf(2);
+  byte two[2];
+  two[0] = '~';
+  two[1] = (running < 0) ? '$' : HEXTRI(running);
+  Serial.write(two, 2);
+  Serial.send_now();
+}
+
+void report_timing() {
+  shiftbuf(2);
+  byte msg[15];
+  int i = 0;
+  msg[i++] = '~';
+  if (running < 0) {
+    msg[i++] = '!';
+    for (int j = 0; j < errormsgN; j++, i++) msg[i] = errormsg[j];
+  }
+  else if (running == 0) {
+    byte zero[] = "000000s000000u";
+    for (int j = 0; j < (int)sizeof(zero); j++, i++) msg[i] = zero[j];
+  }
+  else {
+    six_in(global_clock.s, msg + i);
+    i += 6;
+    msg[i++] = 's';
+    six_in(global_clock.u, msg + i);
+    i += 6;
+    msg[i++] = 'u';
+  }
+  msg[sizeof(msg)-1] = '$';
+  Serial.write(msg, sizeof(msg));
+  Serial.send_now();
+}
+
+void shift_timing(int direction) {
+  if (bufi >= 9) shiftbuf(9); // TODO--actually do something
+}
+
+void run_command_on(Channel *ch) {
+  // TODO--actually do something
+  for (int i = 2; i < bufi; i++) {
+    if (buf[i] == '$') { shiftbuf(i+1); return; }
+    if (buf[i] == '~') { shiftbuf(i); return; }
+  }
+}
+
+void abort_and_reset() {
+  shiftbuf(2);  // TODO--actually do something
+}
+
+void reset_parameters() {
+  shiftbuf(2);  // TODO--actually do something
+}
+
+void report_identity() {
+  shiftbuf(2);
+  Serial.println(whoamiN, DEC);
+  Serial.write(whoami, whoamiN);
+  Serial.send_now();
+}
+
+void report_pins() {
+  shiftbuf(2);
+  byte pinout[27];
+  int i = 0;
+  pinout[i++] = '~';
+  for (; i <= digiN; i++) pinout[i] = HEXTRI(digi[i-1]);
+  if (waveN > 0) pinout[i++] = '@';
+  pinout[i++] = '$';
+  Serial.write(pinout, i);
+  Serial.send_now();
+}
+
+void raise_unknown_command_error(byte cmd) {
+  shiftbuf(2);
+  halt_channels();
+  running = -1;
+  byte msg[] = "unknown ";
+  int i = 0;
+  for (; i < (int)sizeof(msg); i++) errormsg[i] = msg[i];
+  errormsg[i++] = cmd;
+  for (; i < errormsgN; i++) errormsg[i] = ' ';
+}
+
 // Loop runs forever
 void loop() {
+  // Update timing at the beginning of this loop
+  int now = micros();
+  int delta = now - tick;
+  tick = now;
+  count_me++;
+
   if (running > 0) {
-    int now = micros();
-    int delta = now - tick;
-    tick = now;
+    // Run protocol state machines
     advance(&global_clock, delta);
     for (int i = 0; i < digiN; i++) {
       if (channels[i].runlevel > 0) {
         Channel *ci = &channels[i];
+        Protocol pc = protocols[ci->protocol];
         diminish(&(ci->t), delta);
         if (ci->t.s < 0) {
           if (ci->runlevel == 3) turn_off(ci);
           ci->runlevel = 0;
           running -= 1;
           continue;   // CONTINUE WITH NEXT CHANNEL, THIS ONE IS DONE
+          // TODO--handle switching protocols!
         }
         else {
           diminish(&(ci->yn), delta);
@@ -183,39 +327,126 @@ void loop() {
             bool flipped = false;
             bool on = (ci->runlevel > 1);
             while (ci->yn.s < 0) {
-              advance_from(&(ci->yn), on ? protocols[ci->protocol].n : protocols[ci->protocol].y);
+              advance_from(&(ci->yn), on ? pc.n : pc.y);
               flipped = !flipped;
               on = !on;
             }
-            if (!on) {
-              if (flipped) { 
+            if (on && flipped) {
+              if (ci->runlevel == 3) turn_off(ci);
+              ci->runlevel = 1;
+            }
+            else if (on != flipped) {
+              // We were off and went on, or were on and went off and on.  Either way, we need to figure out what pulse we're in.
+              Dura excess = on ? pc.n : pc.y;
+              diminish_by(&excess, ci->yn);
+              bool pup = true;
+              ci->pq = protocols[ci->protocol].p;
+              diminish_by(&(ci->pq), excess);
+              while (ci->pq.s < 0) {
+                advance_from(&(ci->pq), pup ? pc.q : pc.p);
+                pup = !pup;
+              }
+              if (pup) {
+                if (ci->runlevel < 3) turn_on(ci);
+                ci->runlevel = 3;
+              }
+              else {
                 if (ci->runlevel == 3) turn_off(ci);
-                ci->runlevel = 1;
+                ci -> runlevel = 2;
               }
             }
-            else {
-              // TODO
+            else {}   // We were off, and now are off, so it's all good.
+          }
+          else if (ci->runlevel > 1) {
+            diminish(&(ci->pq), delta);
+            if (ci->pq.s < 0) {
+              bool flipped = false;
+              bool pup = (ci->runlevel == 3);
+              while (ci->pq.s < 0) {
+                advance_from(&(ci->pq), pup ? pc.q : pc.p);
+                flipped = !flipped;
+                pup = !pup;
+              }
+              if (flipped) {
+                if (pup) {
+                  ci->runlevel = 2;
+                  turn_off(ci);
+                }
+                else {
+                  ci->runlevel = 3;
+                  turn_on(ci);
+                }
+              }
             }
           }
-          else {
-            // TODO
-          }
+          else {}  // We were in a stimulus-off state the whole time, so nothing to do
         }
       }
     }
   }
+  else {
+    // Run state machine for LED status blinking
+    diminish(&blinking, delta);
+    if (blinking.s < 0) {
+      if (blink_is_on) {
+        digitalWrite(LED_PIN, LOW);
+        advance(&blinking, (running == 0) ? 1980000 : ((running == -1) ? 470000 : 90000));
+        blink_is_on = false;
+      }
+      else {
+        digitalWrite(LED_PIN, HIGH);
+        advance(&blinking, (running == 0) ? 20000 : ((running == -1) ? 30000 : 10000));
+        blink_is_on = true;
+      }
+      Serial.println(bufi);
+      Serial.send_now();
+      count_me = 0;
+    }
+  }
 
+  // Read anything waiting on the serial port
+  int av = Serial.available();
+  if (av > 0) {
+    byte c = Serial.read();
+    while (bufi == 0 && c != '~') {
+      av--;
+      if (av > 0) c = Serial.read();
+      else break;
+    }
+    if (av > 0) {
+      buf[bufi++] = c;
+      av--;
+      while (bufi < bufN && av > 0) {
+        c = Serial.read();
+        buf[bufi++] = c;
+        av--;
+      }
+    }
+  }
 
-  int r0 = ARM_DWT_CYCCNT;
-  digitalWrite(LED_PIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-  int m = micros();
-  int n = 100000;
-  while ((int)micros() - m < n) {};
-  digitalWrite(LED_PIN, LOW);    // turn the LED off by making the voltage LOW
-  m = micros();
-  n = 900000;
-  while ((int)micros() - m < n) {};
-  int r = ARM_DWT_CYCCNT;
-  Serial.println(r - r0);
-  Serial.send_now();
+  // Interpret any fully buffered commands
+  if (bufi > 1) {
+    // NOTE--subcommands are responsible for checking for completeness and consuming input if it is complete!
+    char cmd = buf[1];
+    Serial.println(cmd,DEC);
+    Serial.send_now();
+    if      (cmd == '!') start_running();
+    else if (cmd == '$') report_errors();
+    else if (cmd == '?') report_timing();
+    else if (cmd == '>') shift_timing(1);
+    else if (cmd == '<') shift_timing(-1);
+    else if ((cmd >= '0' && cmd <= '9') || (cmd >= 'A' && cmd <= 'N'))
+                         run_command_on(channels + DEHEXT(cmd));
+    else if (cmd == '@') run_command_on(channels + DIG);
+    else if (cmd == '.') abort_and_reset();
+    else if (cmd == '"') reset_parameters();
+    else if (cmd == ':') report_identity();
+    else if (cmd == '*') report_pins();
+    else                 raise_unknown_command_error(cmd);
+  }
+
+  // int r = ARM_DWT_CYCCNT;   // Read cycle count (effectively a 72 MHz clock)
+  // Serial.println(r - r0);
+  // Serial.send_now();
 }
+

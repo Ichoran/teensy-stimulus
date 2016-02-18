@@ -10,7 +10,7 @@ Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulu
 
 A stimulus protocol consists of one or more **stimulus trains** which execute sequentially.  Each train consists of an **initial delay** followed by one or more repeats of a timed **stimulus on** phase followed by a timed **stimulus off**.  The pattern repeats until the total **duration** of the stimulus train has elapsed (counting the initial delay).
 
-Digital stimuli consist of repeated **pulse on** and **pulse off** blocks.  Analog stimuli consist of a **frequency** and a **shape**.
+Digital stimuli consist of repeated **pulse on** and **pulse off** blocks.  Analog stimuli consist of a **frequency** and an **amplitude**.
 
 Due to the limitations of the Teensy 3.1 analog/digital outputs, one cannot mix analog and digital outputs on the same channel.  Furthermore, a maximum of 254 stimulus trains may be used across all output channels.
 
@@ -32,7 +32,15 @@ If you send the command `~:`, a Teensy Stimulus device will respond with a strin
 
 ### Output channels
 
-Digital output channels are specified by letter, starting with `A`.  Analog output channels are specified by number, starting with `0`.
+Digital output channels are specified by number, starting with `0` (the ASCII character).  Past `9`, continue with `A`.  The analog output channel, if any, is specified by the symbol `@`.
+
+#### Checking Which Outputs are Valid
+
+By default, 24 digital outputs (the maximum) and one analog output are available.  However, these may not be wired up to anything in a particular device.  Thus, a device can be programmed to accept only a subset of outputs.
+
+To check which outputs are valid, send the command `~*`.  The Teensy will respond with a list of valid output channels between `~` and `$` characters.  For example, `~0123456789ABCD@$` would mean that the first fourteen output channels, plus the analog output channel (`@`), are available, and that the output channels are in the numerical order listed on the Teensy board.  (By default, pins 14-23, then 0-13 are used, so the default string would be `~EFGHIJKLMN0123456789ABCD@$`)
+
+Note that the 24th digital output, `N`, is usually hooked up to the Teensy 3.1's LED pin.  (Pin number 13, or `D` in hexatrigecimal.)
 
 ### Durations and Other Numbers
 
@@ -42,15 +50,7 @@ Other numbers use either a decimal text format or hexatrigecimal (base 36) based
 
 ### Specifying a Stimulus Train
 
-Stimulus trains can be specified either as a single long command or piece by piece.
-
-#### Checking Which Outputs are Valid
-
-By default, 24 digital outputs (the maximum) and one analog output are available.  However, these may not be wired up to anything in a particular device.  Thus, a device can be programmed to accept only a subset of outputs.
-
-To check which outputs are valid, send the command `~*`.  The Teensy will respond with a list of valid output channels between `~` and `$` characters.  For example, `~0123456789ABCDEF@$` would mean that the first sixteen output channels, plus the analog output channel (`@`), are available.
-
-Note that the 24th digital output, `N`, is usually hooked up to the Teensy 3.1's LED pin.  (Pin number 13, or `D` in hexatrigecimal.)
+Stimulus trains can be specified either as a single long command or piece by piece, as described below.
 
 #### Specifying Stimulus Train Parameters
 
@@ -150,6 +150,18 @@ Overall, the reply is 61 bytes long.
 
 For analog outputs, the difference between the target time for changing voltage and the actual time is reported instead of starting pulse edge values, and there are no stats for ending pulses.  This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this between stimuli or during debugging.
 
+## Visual feedback
+
+The Teensy board contains an on-board LED which will blink to report on its status.
+
+If the device is improperly initialized, the LED will blink slowly (1s on, 1s off).
+
+If the device is waiting to receive commands to set up stimuli and/or start running, the LED will flash briefly twice a second.  When a stimulus protocol has finished, these flashes will be especially brief (dim).
+
+If the device has encountered an error while running, the LED will flash very quickly (five times a second).
+
+While a stimulus protocol is running, the LED will be off by default.  If there is a protocol running on that output, the LED will do whatever the protocol tells it to do.
+
 ## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
 
 TODO: write this.
@@ -172,7 +184,7 @@ TODO: write this.
 
 | Command | Command Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Check errors | `$` | 2 chars: `~$` if okay, `~X` if error. | Note that `~$` is effectively the empty command. |
+| Check errors | `$` | 2 chars: `~$` if error, otherwise `~` followed by # of running channels. | Number is in hexatrigecimal (one character). |
 | Abort        | `.` | None | Stops any running protocol.  Also clears error state. |
 | Reset        | `"` | None | Restores previous protocol if applied after a completed run or abort.  Otherwise sets error state. |
 | Run          | `!` | None | Starts protocol running.  Sets error state if there is no protocol or one is running. |

@@ -122,6 +122,8 @@ void setup() {
 
 bool already_got_it = false;
 
+unsigned int lastmillis = 0;
+
 // the loop routine runs over and over again forever:
 void loop() {
   if (Serial.available() || already_got_it) {
@@ -172,4 +174,5 @@ void loop() {
     }
   }
 }
+
 
