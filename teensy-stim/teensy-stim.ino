@@ -3,6 +3,7 @@
  */
 
 #include <EEPROM.h>
+#include <math.h>
 
 int eepsigN = 8;
 int idN = 12;
@@ -29,49 +30,50 @@ struct Dura {
 };
 
 struct Protocol {
-  Dura t;
-  Dura d;
-  Dura y;
-  Dura n;
-  Dura p;
-  Dura q;
-  byte i;
-  byte s;
-  byte next;
+  Dura t;    // Total time
+  Dura d;    // Delay
+  Dura y;    // Stimulus on time
+  Dura n;    // Stimulus off time
+  Dura p;    // Pulse time
+  Dura q;    // Pulse off time
+  byte i;    // Invert? 0 = no
+  byte s;    // What is this for?
+  byte next; // Number of next protocol, 255 = none
   byte unused0;
-}
+};
 
-struct State {
-  Dura t;
-  Dura yn;
-  Dura pq;
-  byte i;
-  byte s;
-  byte protocol;
-  byte runlevel;
-  byte pin;
+struct Channel {
+  Dura t;        // Time remaining
+  Dura yn;       // Time until next stimulus status switch
+  Dura pq;       // Time until next pulse status switch
+  byte protocol; // Which protocol we're running, 255 = none
+  byte runlevel; // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
+  byte pin;      // The digital pin number for this output, or 255 = analog out
   byte unused0;
-  byte unused1;
-  byte unused2;
 };
 
 int proto_i = 0;
 Protocol protocols[PROT];
 
-State channels[CHAN];
+Channel channels[CHAN];
 
 int errormsgN = 12;
 byte errormsg[12];
 
 char buf[63];
 
+int tick;               // Last clock tick (microseconds), used to update time
+Dura global_clock;      // Counts up from the start of protocols
+volatile int running;   // Number of running channels.  0 = setup, values < 0 = error state
+
 void read_my_eeprom() {
   // Make sure the EEPROM corresponds to the expected device
   int i = 0;
   for (; i < eepsigN; i++) if (EEPROM.read(i) != eepsig[i]) {
-    char *msg = "wrong-ver"
-    runlevel = 255;
-    for (int j = 0; j < 9; j++) errormsg[j] = msg[j];
+    char msg[] = "wrong-ver";
+    running = -1;
+    int j = 0;
+    for (; j < 9; j++) errormsg[j] = msg[j];
     for (; j < errormsgN; j++) errormsg[j] = ' ';
     return;
   }
@@ -100,17 +102,17 @@ void read_my_eeprom() {
   }
 }
 
+void init_wave() {
+  for (int i = 0; i < 256; i++) {
+    wave[i] = 2047 + (short)round(2047*sin(i * 2 * M_PI));
+  }
+}
+
 void init_pins() {
   if (waveN > 0) analogWriteResolution(12);
   pinMode(LED_PIN, OUTPUT);
   for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
 }
-
-int tick;
-Dura global_clock;
-volatile int running;
-volatile int errorcode;
-volatile bool finished;
 
 void advance(Dura *x, int us) {
   x->u += us;
@@ -141,17 +143,26 @@ void setup() {
   Serial.begin(115200);
   ARM_DEMCR |= ARM_DEMCR_TRCENA;
   ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
-  fix = micros();
-  for (int i = 0; i < PROT; i++) protocols[i].protocol = 255;
+  for (int i = 0; i < PROT; i++) protocols[i].next = 255;
   for (int j = 0; j < CHAN; j++) channels[j].protocol = 255;
   running = 0;
-  errorcode = 0;
-  finished = false;
+}
+
+void turn_off(Channel *ci) {
+  Protocol *p = (protocols + ci->protocol);
+  if (p->i == 0) digitalWrite(ci->pin, LOW);
+  else digitalWrite(ci->pin, HIGH);
+}
+
+void turn_on(Channel *ci) {
+  Protocol *p = (protocols + ci->protocol);
+  if (p->i == 0) digitalWrite(ci->pin, HIGH);
+  else digitalWrite(ci->pin, LOW);
 }
 
 // Loop runs forever
 void loop() {
-  if (running > 0 && errorcode == 0) {
+  if (running > 0) {
     int now = micros();
     int delta = now - tick;
     tick = now;
@@ -163,7 +174,7 @@ void loop() {
         if (ci->t.s < 0) {
           if (ci->runlevel == 3) turn_off(ci);
           ci->runlevel = 0;
-          runlevel -= 1;
+          running -= 1;
           continue;   // CONTINUE WITH NEXT CHANNEL, THIS ONE IS DONE
         }
         else {
@@ -172,7 +183,7 @@ void loop() {
             bool flipped = false;
             bool on = (ci->runlevel > 1);
             while (ci->yn.s < 0) {
-              advance_from(&(ci->yn), on ? protocol[ci->protocol].n : protocol[ci->protocol].y);
+              advance_from(&(ci->yn), on ? protocols[ci->protocol].n : protocols[ci->protocol].y);
               flipped = !flipped;
               on = !on;
             }
@@ -192,21 +203,19 @@ void loop() {
         }
       }
     }
-    if (running == 0 || errorcode != 0) finished = true;
   }
 
 
-  digitalWrite(led, HIGH);   // turn the LED on (HIGH is the voltage level)
+  int r0 = ARM_DWT_CYCCNT;
+  digitalWrite(LED_PIN, HIGH);   // turn the LED on (HIGH is the voltage level)
   int m = micros();
   int n = 100000;
-  while (micros() - m < n) {};
-  digitalWrite(led, LOW);    // turn the LED off by making the voltage LOW
+  while ((int)micros() - m < n) {};
+  digitalWrite(LED_PIN, LOW);    // turn the LED off by making the voltage LOW
   m = micros();
   n = 900000;
-  while (micros() - m < n) {};
+  while ((int)micros() - m < n) {};
   int r = ARM_DWT_CYCCNT;
   Serial.println(r - r0);
-  Serial.println(micros() - fix);
   Serial.send_now();
 }
-
