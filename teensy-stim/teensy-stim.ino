@@ -50,13 +50,17 @@ struct Channel {
   Dura t;        // Time remaining
   Dura yn;       // Time until next stimulus status switch
   Dura pq;       // Time until next pulse status switch
-  byte protocol; // Which protocol we're running, 255 = none
   byte runlevel; // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
   byte pin;      // The digital pin number for this output, or 255 = analog out
   byte disabled; // Channel may not be used unless it is 0
+  byte protocol; // Which protocol we're running now, 255 = none
+  byte protzero; // Initial protocol to start at (used only for resetting), 255 = none
+  byte protidx;  // Counts up as we walk through protocols
+  byte unused0;
+  byte unused1;
 };
 
-int proto_i = 0;
+int protoi = 0;
 Protocol protocols[PROT];
 
 Channel channels[CHAN];
@@ -75,6 +79,11 @@ int tick;               // Last clock tick (microseconds), used to update time
 Dura global_clock;      // Counts up from the start of protocols
 Dura pending_shift;     // Requested shifts in timing.  TODO--actually make the shifts.
 volatile int running;   // Number of running channels.  0 = setup, values < 0 = error state
+void run_by(int r) {
+  cli();
+  running = running + r;   // Super-explicit so you see it isn't an atomic operation!
+  sei();
+}
 
 Dura blinking;
 volatile bool blink_is_on;
@@ -199,8 +208,24 @@ void turn_on(Channel *ci) {
   else digitalWrite(ci->pin, LOW);
 }
 
+void halt_a_channel(Channel *ch) {
+  if (ch->pin != 255 && ch->runlevel == 3) turn_off(ch);
+  ch->runlevel = 0;
+  run_by(-1);
+}
+
 void halt_channels() {
-  // TODO--do something
+  protoi = -protoi;
+  for (int i = 0; i < CHAN; i++) halt_a_channel(channels + i);
+  if (running > 0 && channels[DIG].runlevel > 0) {
+    unsigned int m = micros();
+    while (running > 0 && micros() - m < 100000) {}
+  }
+  if (running > 0) running = 0;
+}
+
+void die_with_message(const char *msg) {
+  // TODO--actually set state etc.
 }
 
 void six_in(int value, byte *target) {
@@ -215,6 +240,22 @@ int six_out(byte *target) {
     s = 10*s + (c-'0');
   }
   return s;
+}
+
+void seven_in(Dura t, byte *target) {
+  if (t.s >= 1000) {
+    six_in(t.s, target);
+    target[6] = 's';
+  }
+  else if (t.s >= 1) {
+    six_in(t.s*1000 + t.u/1000, target);
+    target[6] = 'm';
+  }
+  else {
+    if (t.s < 0 || t.u < 0) six_in(0, target);
+    else six_in(t.u, target);
+    target[6] = 'u';
+  }
 }
 
 void parse_time_error() {
@@ -256,7 +297,8 @@ void report_errors() {
   shiftbuf(2);
   byte two[2];
   two[0] = '~';
-  two[1] = (running < 0) ? '$' : HEXTRI(running);
+  int r = running;
+  two[1] = (r < 0) ? '$' : HEXTRI(r);
   Serial.write(two, 2);
   Serial.send_now();
 }
@@ -296,6 +338,204 @@ void shift_timing(int direction) {
   }
 }
 
+void raise_unknown_command_error(byte cmd, byte chan) {
+  shiftbuf(2);
+  halt_channels();
+  running = -1;
+  memcpy(errormsg, "unknown", 7);
+  memset(errormsg + 7, ' ', errormsgN - 7);
+  errormsg[8] = cmd;
+  errormsg[10] = chan;
+}
+
+void abort_channel(Channel *ch) {
+  shiftbuf(3);
+  halt_a_channel(ch);
+}
+
+void report_channel_state(Channel *ch) {
+  shiftbuf(3);
+  byte msg[4];
+  msg[0] = '~';
+  msg[1] = '0' + ch->runlevel;
+  msg[2] = HEXTRI((ch->protzero >> 5));
+  msg[3] = HEXTRI((ch->protzero & 0x1F));
+  Serial.write(msg, 4);
+  Serial.send_now();
+}
+
+void run_only_channel(Channel *ch) {
+  shiftbuf(3);
+  // TODO--actually run the channel
+}
+
+void set_and_run_only_channel(Channel *ch) {
+  // TODO--actually do this
+}
+
+Protocol not_a_protocol;
+
+Protocol* ensure_protocol(Channel *ch) {
+  // TODO--make something that works
+  return &not_a_protocol;
+}
+
+bool assert_not_running(Channel *ch) {
+  // TODO--make this check something
+  return false;
+}
+
+bool assert_is_wave(Channel *ch) {
+  // TODO--make this check something
+  return false;
+}
+
+bool assert_is_digital(Channel *ch) {
+  // TODO--make this check something
+  return false;
+}
+
+void report_channel_protocol(Channel *ch) {
+  shiftbuf(3);
+  byte msg[45];
+  int i = 0;
+  msg[i++] = '~';
+  Protocol *p = ensure_protocol(ch);
+  seven_in(p->t, msg+i); i += 7;
+  seven_in(p->d, msg+i); i += 7;
+  seven_in(p->y, msg+i); i += 7;
+  seven_in(p->n, msg+i); i += 7;
+  seven_in(p->p, msg+i); i += 7;
+  seven_in(p->q, msg+i); i += 7;
+  msg[i++] = (p->i == 0) ? ';' : 'i';
+  msg[i++] = (p->s == 0) ? ';' : ((p->s == 1) ? 's' : 'r');
+  Serial.write(msg, i);
+  Serial.send_now();
+}
+
+void report_channel_stats(Channel *ch) {
+  shiftbuf(3);
+  // TODO--actually report the stats.  Need to collect them first.
+}
+
+void invert_polarity(Channel *ch) {
+  shiftbuf(3);
+  Protocol *p = ensure_protocol(ch);
+  if (assert_not_running(ch)) p->i = (p->i == 0) ? 255 : 0;
+}
+
+void set_channel_shape(Channel *ch, byte shape) {
+  Protocol *p = ensure_protocol(ch);
+  if ((shape == 0 || assert_is_wave(ch)) && assert_not_running(ch)) p->s = shape;
+}
+
+void make_sinusoidal(Channel *ch) { 
+  shiftbuf(3);
+  set_channel_shape(ch, 1);
+}
+
+void make_triangular(Channel *ch) {
+  shiftbuf(3);
+  set_channel_shape(ch, 2);
+}
+
+void set_channel_time(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch)) p->t = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_delay(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch)) p->d = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_stim_on(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch)) p->y = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_stim_off(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch)) p->n = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_pulse_on(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch) && assert_is_digital(ch)) p->p = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_pulse_off(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch) && assert_is_digital(ch)) p->q = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_wave_period(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch) && assert_is_wave(ch)) p->p = parse_time(buf + 3);
+    shiftbuf(10);
+  }
+}
+
+void set_channel_wave_amplitude(Channel *ch) {
+  if (bufi >= 10) {
+    Protocol *p = ensure_protocol(ch);
+    if (assert_not_running(ch) && assert_is_wave(ch)) {
+      p->q.s = 0;
+      p->q.u = six_out(buf + 3);
+    }
+    // TODO -- error message if u > 2047.
+    shiftbuf(10);
+  }
+}
+
+void set_channel(Channel *ch) {
+  if (bufi >= 47) {
+    Protocol *p = ensure_protocol(ch);
+    int i = 3;
+    p->t = parse_time(buf + i); i += 7;
+    p->d = parse_time(buf + i); i += 7;
+    p->y = parse_time(buf + i); i += 7;
+    p->n = parse_time(buf + i); i += 7;
+    p->p = parse_time(buf + i); i += 7;
+    if (ch->pin != 255) p->q = parse_time(buf + i);
+    else { p->q.u = six_out(buf + i); p->q.s = 0; }
+    i += 7;
+    byte c = buf[i++];
+    if (c == ';') p->i = 0; else if (c == 'i') p->i = 255; else die_with_message("bad invert");
+    c = buf[i++];
+    if (c == ';') p->s = 0;
+    else if (assert_is_wave(ch)) {
+      if (c == 's') p->s = 1;
+      else if (c == 'r') p->s = 2;
+      else die_with_message("bad shape");
+    }
+    shiftbuf(47);
+  }
+}
+
+void append_protocol(Channel *ch) {
+  // TODO--actually do it
+}
+
 void parse_command_on(Channel *ch, char who) {
   if (ch->disabled) {
     halt_channels();
@@ -303,9 +543,28 @@ void parse_command_on(Channel *ch, char who) {
     memcpy(errormsg,"inactive    ", 12);
     errormsg[9] = who;
   }
-  for (int i = 2; i < bufi; i++) {
-    if (buf[i] == '$') { shiftbuf(i+1); return; }
-    if (buf[i] == '~') { shiftbuf(i); return; }
+  if (bufi > 2) {
+    byte c = buf[2];  // Command
+    if      (c == '.') abort_channel(ch);
+    else if (c == '$') report_channel_state(ch);
+    else if (c == '!') run_only_channel(ch);
+    else if (c == '/') set_and_run_only_channel(ch);
+    else if (c == '*') report_channel_protocol(ch);
+    else if (c == '#') report_channel_stats(ch);
+    else if (c == 'i') invert_polarity(ch);
+    else if (c == 's') make_sinusoidal(ch);
+    else if (c == 'r') make_triangular(ch);
+    else if (c == 't') set_channel_time(ch);
+    else if (c == 'd') set_channel_delay(ch);
+    else if (c == 'y') set_channel_stim_on(ch);
+    else if (c == 'n') set_channel_stim_off(ch);
+    else if (c == 'p') set_channel_pulse_on(ch);
+    else if (c == 'q') set_channel_pulse_off(ch);
+    else if (c == 'w') set_channel_wave_period(ch);
+    else if (c == 'a') set_channel_wave_amplitude(ch);
+    else if (c == '=') set_channel(ch);
+    else if (c == '+') append_protocol(ch);
+    else               raise_unknown_command_error(c, who);
   }
 }
 
@@ -338,15 +597,7 @@ void report_pins() {
   Serial.send_now();
 }
 
-void raise_unknown_command_error(byte cmd) {
-  shiftbuf(2);
-  halt_channels();
-  running = -1;
-  memcpy(errormsg, "unknown ", 8);
-  memset(errormsg + 8, ' ', errormsgN - 8);
-}
-
-// Loop runs forever
+// Loop runs forever (after setup)
 void loop() {
   // Update timing at the beginning of this loop
   int now = micros();
@@ -365,7 +616,7 @@ void loop() {
         if (ci->t.s < 0) {
           if (ci->runlevel == 3) turn_off(ci);
           ci->runlevel = 0;
-          running -= 1;
+          run_by(-1);
           continue;   // CONTINUE WITH NEXT CHANNEL, THIS ONE IS DONE
           // TODO--handle switching protocols!
         }
@@ -490,7 +741,7 @@ void loop() {
     else if (cmd == '"') reset_parameters();
     else if (cmd == ':') report_identity();
     else if (cmd == '*') report_pins();
-    else                 raise_unknown_command_error(cmd);
+    else                 raise_unknown_command_error(cmd, ' ');
   }
 
   // int r = ARM_DWT_CYCCNT;   // Read cycle count (effectively a 72 MHz clock)

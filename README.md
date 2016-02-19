@@ -105,13 +105,13 @@ If you wish to have a channel run multiple stimulus trains in succession, you ca
 ~0+000120s000030s000300m005700m004500u005500u;;
 ```
 
-Finally, if you wish to set a single channel and run it at once, use the `!` command:
+Finally, if you wish to set a single channel and run it at once, use the `/` command:
 
 ```
-~0!000120s000030s000300m005700m004500u005500u;;
+~0/000120s000030s000300m005700m004500u005500u;;
 ```
 
-If a protocol is already running, it will be terminated and this one will start running instead.
+If a protocol is already running, it is an error to try to start a new one.
 
 ### Error States
 
@@ -129,7 +129,9 @@ To ask the board to tell what time point it is at, send the command `~?`.  It wi
 
 To ask the board to reset its internal clock earlier, send the command `~<` followed by a duration.  It will not interrupt a stimulus to do this, but will shrink the gap between stimuli.  To ask the board to reset its internal clock to later, send `~>` followed by a duration.  This provides an approximate way to synchronize timing between the board and other devices.
 
-To query the state machine that runs an individual channel, send the command `~0?` for channel `0` (likewise for the others).  The board will respond with `~`, then the protocol it is running in the same format used to set the channels, followed by four `+` or `-` characters.
+To query the state machine that runs an individual channel, send the command `~0$` for channel `0` (likewise for the others).  The board will respond with `~`, followed by a number from ``'0'`` to `'3'`` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  Then there are two hextrigecimal characters that specify the index of the protocol being run, counting up from 0 (i.e. `00`).
+
+If you need to tell what parameters are set for the protocol a channel it is running, use `~0*` and the board will respond with `~` then the protocol it is running in the same format used to set the channels.
 
 The first character indicates whether that channel is running at all (`+` = yes, `-` = no).  The second indicates whether it a stimulus is active or not (`+` = yes, `-` = no).  The third indicates whether a pulse is active within a stimulus (`+` = yes, `-` = no; this is always `+` during a waveform unless part of a final half-wave is being skipped).  The fourth indicates whether there is another stimulus train after this one completes (`+` = yes, `-` = no).  The response is thus 49 characters long: the `~` message start symbol, 6 7-character durations, two characters for shape, and 4 `+` or `-` flags.
 
@@ -211,7 +213,8 @@ Sending a command to a channel that is not enabled will raise an error.
 |---------|--------------|---------|------------------------|
 | Abort run       | `.` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
 | Run alone       | `!` | None | Runs this output channel protocol alone.  Sets error state if another protocol is running. |
-| Check protocol  | `?` | 48 chars: 6 durations, 6 one-char flags | See text for details |
+| Check state     | `$` | 3 chars: one run level, two for protocol number | See text for details |
+| Check protocol  | `*` | 44 chars: 6 durations, 2 one-char flags | See text for details |
 | Check quality   | `#` | 60 chars: 8 decimal numbers | See text for details |
 | Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog).  Raises error if running. |
 | Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal.  Raises error if running or applied to digital channel. |
@@ -221,14 +224,14 @@ Sending a command to a channel that is not enabled will raise an error.
 
 | Command | Command Char | Parameter | Result? | Additional Description |
 |---------|--------------|-----------|---------|------------------------|
-| Set duration          | `d` | 7 chars: duration | None | |
-| Set initial delay     | `i` | 7 chars: duration | None | |
+| Set total time        | `t` | 7 chars: duration | None | |
+| Set initial delay     | `d` | 7 chars: duration | None | |
 | Set stimulus on time  | `y` | 7 chars: duration | None | |
 | Set stimulus off time | `n` | 7 chars: duration | None | |
 | Set pulse on time     | `p` | 7 chars: duration | None | Digital channels only. |
 | Set pulse off time    | `q` | 7 chars: duration | None | Digital channels only. |
 | Set period            | `w` | 7 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
-| Set amplitude         | `a` | 4 chars: 0123 (decimal) | None | Analog channels only.  Max value 2047. |
+| Set amplitude         | `a` | 7 chars: fake duration | None | Analog channels only.  Max value 2047.  Time unit is ignored. |
 | Set full protocol     | `=` | 44 chars: 6x duration + 2 flags or `;` | None | Analog amplitude should use a fake duration (any units). |
 | Append protocol       | `+` | 44 chars: same as `=` | None | Same as `=` |
-| Set and run protocol  | `!` | 44 chars: same as `=` | None | Raises error if protocol is already running. Runs this channel alone. |
+| Set and run protocol  | `/` | 44 chars: same as `=` | None | Raises error if protocol is already running. Runs this channel alone. |
