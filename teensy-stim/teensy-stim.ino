@@ -53,7 +53,7 @@ struct Channel {
   byte protocol; // Which protocol we're running, 255 = none
   byte runlevel; // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
   byte pin;      // The digital pin number for this output, or 255 = analog out
-  byte unused0;
+  byte disabled; // Channel may not be used unless it is 0
 };
 
 int proto_i = 0;
@@ -69,10 +69,11 @@ byte whoami[24];
 
 int bufi;
 int bufN = 63;
-char buf[63];
+byte buf[63];
 
 int tick;               // Last clock tick (microseconds), used to update time
 Dura global_clock;      // Counts up from the start of protocols
+Dura pending_shift;     // Requested shifts in timing.  TODO--actually make the shifts.
 volatile int running;   // Number of running channels.  0 = setup, values < 0 = error state
 
 Dura blinking;
@@ -172,10 +173,16 @@ void setup() {
   ARM_DEMCR |= ARM_DEMCR_TRCENA;
   ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
   for (int i = 0; i < PROT; i++) protocols[i].next = 255;
-  for (int j = 0; j < CHAN; j++) channels[j].protocol = 255;
+  for (int j = 0; j < CHAN; j++) {
+    channels[j].protocol = 255;
+    if (j < DIG) channels[j].disabled = (j >= digiN) ? 1 : 0;
+    else channels[j].disabled = (waveN < 1) ? 1 : 0;
+  }
   running = 0;
   blinking.s = 0;
   blinking.u = 1000;   // 1 ms delay before doing anything
+  pending_shift.s = 0;
+  pending_shift.u = 0;
   tick = micros();
   bufi = 0;
 }
@@ -198,6 +205,38 @@ void halt_channels() {
 
 void six_in(int value, byte *target) {
   for (int i = 5; i >= 0; i--, value /= 10) target[i] = '0'+(value%10);
+}
+
+int six_out(byte *target) {
+  int s = 0;
+  for (int i = 0; i < 6; i++) {
+    byte c = target[i];
+    if (c < '0' || c > '9') return -1;
+    s = 10*s + (c-'0');
+  }
+  return s;
+}
+
+void parse_time_error() {
+  halt_channels();
+  memcpy(errormsg, "bad time    ", 12);
+  running = -1;
+}
+
+Dura parse_time(byte *target) {
+  Dura result;
+  result.s = 0;
+  result.u = 0;
+  int s = six_out(target);
+  if (s < 0) parse_time_error();
+  else {
+    byte c = target[6];
+    if (c == 's') result.s = s;
+    else if (c == 'u') result.u = s;
+    else if (c == 'm') { result.s = s/1000; result.u = s%1000; }
+    else parse_time_error();
+  }
+  return result;
 }
 
 volatile int count_me;
@@ -230,10 +269,11 @@ void report_timing() {
   if (running < 0) {
     msg[i++] = '!';
     for (int j = 0; j < errormsgN; j++, i++) msg[i] = errormsg[j];
+    msg[i++] = '$';
   }
   else if (running == 0) {
-    byte zero[] = "000000s000000u";
-    for (int j = 0; j < (int)sizeof(zero); j++, i++) msg[i] = zero[j];
+    memcpy(msg + i, "000000s000000u", 14);
+    i += 14;
   }
   else {
     six_in(global_clock.s, msg + i);
@@ -243,17 +283,26 @@ void report_timing() {
     i += 6;
     msg[i++] = 'u';
   }
-  msg[sizeof(msg)-1] = '$';
-  Serial.write(msg, sizeof(msg));
+  Serial.write(msg, i);
   Serial.send_now();
 }
 
 void shift_timing(int direction) {
-  if (bufi >= 9) shiftbuf(9); // TODO--actually do something
+  if (bufi >= 9) {
+    Dura my_shift = parse_time(buf + 2);
+    shiftbuf(9);
+    if (direction < 0) diminish_by(&pending_shift, my_shift);
+    else advance_from(&pending_shift, my_shift);
+  }
 }
 
-void run_command_on(Channel *ch) {
-  // TODO--actually do something
+void parse_command_on(Channel *ch, char who) {
+  if (ch->disabled) {
+    halt_channels();
+    running = -1;
+    memcpy(errormsg,"inactive    ", 12);
+    errormsg[9] = who;
+  }
   for (int i = 2; i < bufi; i++) {
     if (buf[i] == '$') { shiftbuf(i+1); return; }
     if (buf[i] == '~') { shiftbuf(i); return; }
@@ -261,7 +310,9 @@ void run_command_on(Channel *ch) {
 }
 
 void abort_and_reset() {
-  shiftbuf(2);  // TODO--actually do something
+  shiftbuf(2);
+  if (running > 0) halt_channels();
+  running = 0;
 }
 
 void reset_parameters() {
@@ -291,11 +342,8 @@ void raise_unknown_command_error(byte cmd) {
   shiftbuf(2);
   halt_channels();
   running = -1;
-  byte msg[] = "unknown ";
-  int i = 0;
-  for (; i < (int)sizeof(msg); i++) errormsg[i] = msg[i];
-  errormsg[i++] = cmd;
-  for (; i < errormsgN; i++) errormsg[i] = ' ';
+  memcpy(errormsg, "unknown ", 8);
+  memset(errormsg + 8, ' ', errormsgN - 8);
 }
 
 // Loop runs forever
@@ -436,8 +484,8 @@ void loop() {
     else if (cmd == '>') shift_timing(1);
     else if (cmd == '<') shift_timing(-1);
     else if ((cmd >= '0' && cmd <= '9') || (cmd >= 'A' && cmd <= 'N'))
-                         run_command_on(channels + DEHEXT(cmd));
-    else if (cmd == '@') run_command_on(channels + DIG);
+                         parse_command_on(channels + DEHEXT(cmd), cmd);
+    else if (cmd == '@') parse_command_on(channels + DIG, '@');
     else if (cmd == '.') abort_and_reset();
     else if (cmd == '"') reset_parameters();
     else if (cmd == ':') report_identity();
