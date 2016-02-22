@@ -5,11 +5,6 @@
 #include <EEPROM.h>
 #include <math.h>
 
-int eepsigN = 8;
-int idN = 12;
-int eN = eepsigN + idN;
-byte* eepsig = (byte*)"stim1.0 ";
-
 int lo = LOW;
 int hi = HIGH;
 
@@ -24,10 +19,6 @@ int digi[DIG];
 
 int16_t wave[256];
 
-#define CLIP(i, lo, hi) ((i < lo) ? lo : ((i > hi) ? hi : i))
-#define HEXTRI(i) (i + ((i < 10) ? '0' : '7'))
-#define DEHEXT(i) (i - ((i > '9') ? '7' : '0'))
-
 struct Dura {
   int s;
   int u;
@@ -41,9 +32,9 @@ struct Protocol {
   Dura p;    // Pulse time
   Dura q;    // Pulse off time
   byte i;    // Invert? 0 = no
-  byte s;    // What is this for?
+  byte s;    // Shape: 0 = digital, 1 = sinusoidal, 2 = triangular
   byte next; // Number of next protocol, 255 = none
-  byte unused0;
+  byte used; // 0 = unused, otherwise (channel # + 1)
 };
 
 struct Channel {
@@ -60,20 +51,32 @@ struct Channel {
   byte unused1;
 };
 
-int protoi = 0;
-Protocol protocols[PROT];
+int protoi = 0;            // Index of next empty protocol slot
+int proton = 0;            // Total number of protocols
+Protocol protocols[PROT];  // Slots for protocols (not necessarily contiguous)
 
 Channel channels[CHAN];
 
 int errormsgN = 12;
 byte errormsg[12];
 
-int whoamiN = 0;
-byte whoami[24];
+int eepsigN = 8;                    // Stimulator signature size
+byte* eepsig = (byte*)"stim1.0 ";   // Expected string
+int idN = 12;                       // Size of identifying string that follows
+int eN = eepsigN + idN;             // Whole identifier (stim + name)
+int whoamiN = 0;                    // Size of string returned to client
+byte whoami[24];                    // ~ + eepsig + id + $ + zero terminator
 
-int bufi;
-int bufN = 63;
-byte buf[63];
+int bufi = 0;    // Input buffer index
+int bufN = 63;   // Input buffer size
+byte buf[63];    // Input buffer
+void shiftbuf(int n) {
+  if (n > 0) {
+    for (int i = n, j = 0; i < bufi; i++, j++) buf[j] = buf[i];
+    bufi = (n >= bufi) ? 0 : bufi - n;
+  }
+}
+
 
 int tick;               // Last clock tick (microseconds), used to update time
 Dura global_clock;      // Counts up from the start of protocols
@@ -85,8 +88,13 @@ void run_by(int r) {
   sei();
 }
 
-Dura blinking;
-volatile bool blink_is_on;
+Dura blinking;              // Countdown timer for blinking
+volatile bool blink_is_on;  // State reflecting whether blink is on or off
+
+
+/***************************************************
+** Initialization code -- run once only at start! **
+***************************************************/
 
 void read_my_eeprom() {
   // Make sure the EEPROM corresponds to the expected device
@@ -151,28 +159,6 @@ void init_pins() {
   for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
 }
 
-void advance(Dura *x, int us) {
-  x->u += us;
-  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
-}
-
-void advance_from(Dura *x, Dura v) {
-  x->u += v.u;
-  x->s += v.s;
-  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
-}
-
-void diminish(Dura *x, int us) {
-  x->u -= us;
-  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
-}
-
-void diminish_by(Dura *x, Dura v) {
-  x->u -= v.u;
-  x->s -= v.s;
-  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
-}
-
 // Setup runs once at reset / power on
 void setup() {
   running = 0;
@@ -195,6 +181,92 @@ void setup() {
   tick = micros();
   bufi = 0;
 }
+
+
+/********************************
+** Number manipulation and I/O **
+*********************************/
+
+#define CLIP(i, lo, hi) ((i < lo) ? lo : ((i > hi) ? hi : i))
+
+#define HEXTRI(i) (i + ((i < 10) ? '0' : '7'))
+
+#define DEHEXT(i) (i - ((i > '9') ? '7' : '0'))
+
+void six_write(int value, byte *target) {
+  for (int i = 5; i >= 0; i--, value /= 10) target[i] = '0'+(value%10);
+}
+
+int six_read(byte *target) {
+  int s = 0;
+  for (int i = 0; i < 6; i++) {
+    byte c = target[i];
+    if (c < '0' || c > '9') return -1;
+    s = 10*s + (c-'0');
+  }
+  return s;
+}
+
+
+/************************************
+** Manipulation and I/O of timings **
+************************************/
+
+void advance(Dura *x, int us) {
+  x->u += us;
+  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
+}
+
+void advance_from(Dura *x, Dura v) {
+  x->u += v.u;
+  x->s += v.s;
+  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
+}
+
+void diminish(Dura *x, int us) {
+  x->u -= us;
+  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
+}
+
+void diminish_by(Dura *x, Dura v) {
+  x->u -= v.u;
+  x->s -= v.s;
+  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
+}
+
+void seven_write(Dura t, byte *target) {
+  if (t.s >= 1000) {
+    six_write(t.s, target);
+    target[6] = 's';
+  }
+  else if (t.s >= 1) {
+    six_write(t.s*1000 + t.u/1000, target);
+    target[6] = 'm';
+  }
+  else {
+    if (t.s < 0 || t.u < 0) six_write(0, target);
+    else six_write(t.u, target);
+    target[6] = 'u';
+  }
+}
+
+Dura seven_read(byte *target) {
+  Dura dura;
+  int i = six_read(target);
+  if (i < 0) { dura.s = dura.u = -1; }
+  else {
+    if      (target[6] == 's') { dura.s = i; dura.u = 0; }
+    else if (target[6] == 'u') { dura.s = 0; dura.u = i; }
+    else if (target[6] == 'm') { dura.s = i/1000; dura.u = 1000*(i%1000); }
+    else                       { dura.s = -1; dura.u = -1; }
+  }
+  return dura;
+}
+
+
+/*************************************
+** Control of channel state machine **
+*************************************/
 
 void turn_off(Channel *ci) {
   Protocol *p = (protocols + ci->protocol);
@@ -224,38 +296,16 @@ void halt_channels() {
   if (running > 0) running = 0;
 }
 
+
+/******************************
+** Generic parsing utilities **
+******************************/
+
 void die_with_message(const char *msg) {
-  // TODO--actually set state etc.
-}
-
-void six_in(int value, byte *target) {
-  for (int i = 5; i >= 0; i--, value /= 10) target[i] = '0'+(value%10);
-}
-
-int six_out(byte *target) {
-  int s = 0;
-  for (int i = 0; i < 6; i++) {
-    byte c = target[i];
-    if (c < '0' || c > '9') return -1;
-    s = 10*s + (c-'0');
-  }
-  return s;
-}
-
-void seven_in(Dura t, byte *target) {
-  if (t.s >= 1000) {
-    six_in(t.s, target);
-    target[6] = 's';
-  }
-  else if (t.s >= 1) {
-    six_in(t.s*1000 + t.u/1000, target);
-    target[6] = 'm';
-  }
-  else {
-    if (t.s < 0 || t.u < 0) six_in(0, target);
-    else six_in(t.u, target);
-    target[6] = 'u';
-  }
+  int n = strnlen(msg, 63);
+  halt_channels();
+  Serial.write(msg, n);
+  Serial.send_now();
 }
 
 void parse_time_error() {
@@ -265,77 +315,14 @@ void parse_time_error() {
 }
 
 Dura parse_time(byte *target) {
-  Dura result;
-  result.s = 0;
-  result.u = 0;
-  int s = six_out(target);
-  if (s < 0) parse_time_error();
-  else {
-    byte c = target[6];
-    if (c == 's') result.s = s;
-    else if (c == 'u') result.u = s;
-    else if (c == 'm') { result.s = s/1000; result.u = s%1000; }
-    else parse_time_error();
-  }
+  Dura result = seven_read(target);
+  if (result.s < 0) parse_time_error();
   return result;
 }
 
-volatile int count_me;
-
-void shiftbuf(int n) {
-  if (n > 0) {
-    for (int i = n, j = 0; i < bufi; i++, j++) buf[j] = buf[i];
-    bufi = (n >= bufi) ? 0 : bufi - n;
-  }
-}
-
-void start_running() {
-  shiftbuf(2);  // TODO--actually do something
-}
-
-void report_errors() {
-  shiftbuf(2);
-  byte two[2];
-  two[0] = '~';
-  int r = running;
-  two[1] = (r < 0) ? '$' : HEXTRI(r);
-  Serial.write(two, 2);
+void write_now(byte *msg, int n) {
+  Serial.write(msg, n);
   Serial.send_now();
-}
-
-void report_timing() {
-  shiftbuf(2);
-  byte msg[15];
-  int i = 0;
-  msg[i++] = '~';
-  if (running < 0) {
-    msg[i++] = '!';
-    for (int j = 0; j < errormsgN; j++, i++) msg[i] = errormsg[j];
-    msg[i++] = '$';
-  }
-  else if (running == 0) {
-    memcpy(msg + i, "000000s000000u", 14);
-    i += 14;
-  }
-  else {
-    six_in(global_clock.s, msg + i);
-    i += 6;
-    msg[i++] = 's';
-    six_in(global_clock.u, msg + i);
-    i += 6;
-    msg[i++] = 'u';
-  }
-  Serial.write(msg, i);
-  Serial.send_now();
-}
-
-void shift_timing(int direction) {
-  if (bufi >= 9) {
-    Dura my_shift = parse_time(buf + 2);
-    shiftbuf(9);
-    if (direction < 0) diminish_by(&pending_shift, my_shift);
-    else advance_from(&pending_shift, my_shift);
-  }
 }
 
 void raise_unknown_command_error(byte cmd, byte chan) {
@@ -346,31 +333,6 @@ void raise_unknown_command_error(byte cmd, byte chan) {
   memset(errormsg + 7, ' ', errormsgN - 7);
   errormsg[8] = cmd;
   errormsg[10] = chan;
-}
-
-void abort_channel(Channel *ch) {
-  shiftbuf(3);
-  halt_a_channel(ch);
-}
-
-void report_channel_state(Channel *ch) {
-  shiftbuf(3);
-  byte msg[4];
-  msg[0] = '~';
-  msg[1] = '0' + ch->runlevel;
-  msg[2] = HEXTRI((ch->protzero >> 5));
-  msg[3] = HEXTRI((ch->protzero & 0x1F));
-  Serial.write(msg, 4);
-  Serial.send_now();
-}
-
-void run_only_channel(Channel *ch) {
-  shiftbuf(3);
-  // TODO--actually run the channel
-}
-
-void set_and_run_only_channel(Channel *ch) {
-  // TODO--actually do this
 }
 
 Protocol not_a_protocol;
@@ -395,18 +357,137 @@ bool assert_is_digital(Channel *ch) {
   return false;
 }
 
+void set_channel_shape(Channel *ch, byte shape) {
+  Protocol *p = ensure_protocol(ch);
+  if ((shape == 0 || assert_is_wave(ch)) && assert_not_running(ch)) p->s = shape;
+}
+
+
+/********************************************************
+** Interpretation of global commands with no arguments **
+********************************************************/
+
+void start_running() {
+  shiftbuf(2);  // TODO--actually do something
+}
+
+void report_errors() {
+  shiftbuf(2);
+  byte two[2];
+  two[0] = '~';
+  int r = running;
+  two[1] = (r < 0) ? '$' : HEXTRI(r);
+  write_now(two, 2);
+}
+
+void report_timing() {
+  shiftbuf(2);
+  byte msg[15];
+  int i = 0;
+  msg[i++] = '~';
+  if (running < 0) {
+    msg[i++] = '!';
+    for (int j = 0; j < errormsgN; j++, i++) msg[i] = errormsg[j];
+    msg[i++] = '$';
+  }
+  else if (running == 0) {
+    memcpy(msg + i, "000000s000000u", 14);
+    i += 14;
+  }
+  else {
+    six_write(global_clock.s, msg + i);
+    i += 6;
+    msg[i++] = 's';
+    six_write(global_clock.u, msg + i);
+    i += 6;
+    msg[i++] = 'u';
+  }
+  write_now(msg, i);
+}
+
+void abort_and_reset() {
+  shiftbuf(2);
+  if (running > 0) halt_channels();
+  running = 0;
+}
+
+void reset_parameters() {
+  shiftbuf(2);  // TODO--actually do something
+}
+
+void report_identity() {
+  shiftbuf(2);
+  Serial.println(whoamiN, DEC);
+  Serial.write(whoami, whoamiN);
+  Serial.send_now();
+}
+
+void report_pins() {
+  shiftbuf(2);
+  byte pinout[27];
+  int i = 0;
+  pinout[i++] = '~';
+  for (; i <= digiN; i++) pinout[i] = HEXTRI(digi[i-1]);
+  if (waveN > 0) pinout[i++] = '@';
+  pinout[i++] = '$';
+  Serial.write(pinout, i);
+  Serial.send_now();
+}
+
+
+/*****************************************************
+** Interpretation of global commands with arguments **
+*****************************************************/
+
+void shift_timing(int direction) {
+  if (bufi >= 9) {
+    Dura my_shift = parse_time(buf + 2);
+    shiftbuf(9);
+    if (my_shift.s >= 0) {
+      if (direction < 0) diminish_by(&pending_shift, my_shift);
+      else advance_from(&pending_shift, my_shift);
+    }
+  }
+}
+
+
+/******************************************************************
+** Interpretation of channel-specific commands with no arguments **
+******************************************************************/
+
+void abort_channel(Channel *ch) {
+  shiftbuf(3);
+  halt_a_channel(ch);
+}
+
+void report_channel_state(Channel *ch) {
+  shiftbuf(3);
+  byte msg[4];
+  msg[0] = '~';
+  msg[1] = '0' + ch->runlevel;
+  msg[2] = HEXTRI((ch->protzero >> 5));
+  msg[3] = HEXTRI((ch->protzero & 0x1F));
+  Serial.write(msg, 4);
+  Serial.send_now();
+}
+
+void run_only_channel(Channel *ch) {
+  shiftbuf(3);
+  // TODO--actually run the channel
+}
+
 void report_channel_protocol(Channel *ch) {
   shiftbuf(3);
   byte msg[45];
   int i = 0;
   msg[i++] = '~';
   Protocol *p = ensure_protocol(ch);
-  seven_in(p->t, msg+i); i += 7;
-  seven_in(p->d, msg+i); i += 7;
-  seven_in(p->y, msg+i); i += 7;
-  seven_in(p->n, msg+i); i += 7;
-  seven_in(p->p, msg+i); i += 7;
-  seven_in(p->q, msg+i); i += 7;
+  seven_write(p->t, msg+i); i += 7;
+  seven_write(p->d, msg+i); i += 7;
+  seven_write(p->y, msg+i); i += 7;
+  seven_write(p->n, msg+i); i += 7;
+  seven_write(p->p, msg+i); i += 7;
+  seven_write(p->q, msg+i); i += 7;
   msg[i++] = (p->i == 0) ? ';' : 'i';
   msg[i++] = (p->s == 0) ? ';' : ((p->s == 1) ? 's' : 'r');
   Serial.write(msg, i);
@@ -424,11 +505,6 @@ void invert_polarity(Channel *ch) {
   if (assert_not_running(ch)) p->i = (p->i == 0) ? 255 : 0;
 }
 
-void set_channel_shape(Channel *ch, byte shape) {
-  Protocol *p = ensure_protocol(ch);
-  if ((shape == 0 || assert_is_wave(ch)) && assert_not_running(ch)) p->s = shape;
-}
-
 void make_sinusoidal(Channel *ch) { 
   shiftbuf(3);
   set_channel_shape(ch, 1);
@@ -439,68 +515,39 @@ void make_triangular(Channel *ch) {
   set_channel_shape(ch, 2);
 }
 
-void set_channel_time(Channel *ch) {
+/******************************************************************
+** Interpretation of channel-specific commands with no arguments **
+******************************************************************/
+
+void set_a_duration(Channel *ch, size_t offset, bool isdig, bool iswave) {
   if (bufi >= 10) {
     Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch)) p->t = parse_time(buf + 3);
+    Dura *d = (Dura*)((size_t)(p) + offset);
+    if (assert_not_running(ch) && (!isdig || assert_is_digital(ch)) && (!iswave || assert_is_wave(ch))) *d = parse_time(buf+3);
     shiftbuf(10);
   }
 }
 
-void set_channel_delay(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch)) p->d = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_time(Channel *ch)        { set_a_duration(ch, offsetof(Protocol,t), false, false); }
 
-void set_channel_stim_on(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch)) p->y = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_delay(Channel *ch)       { set_a_duration(ch, offsetof(Protocol,d), false, false); }
 
-void set_channel_stim_off(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch)) p->n = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_stim_on(Channel *ch)     { set_a_duration(ch, offsetof(Protocol,y), false, false); }
 
-void set_channel_pulse_on(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch) && assert_is_digital(ch)) p->p = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_stim_off(Channel *ch)    { set_a_duration(ch, offsetof(Protocol,n), false, false); }
 
-void set_channel_pulse_off(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch) && assert_is_digital(ch)) p->q = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_pulse_on(Channel *ch)    { set_a_duration(ch, offsetof(Protocol,p), true, false); }
 
-void set_channel_wave_period(Channel *ch) {
-  if (bufi >= 10) {
-    Protocol *p = ensure_protocol(ch);
-    if (assert_not_running(ch) && assert_is_wave(ch)) p->p = parse_time(buf + 3);
-    shiftbuf(10);
-  }
-}
+void set_channel_pulse_off(Channel *ch)   { set_a_duration(ch, offsetof(Protocol,q), true, false); }
+
+void set_channel_wave_period(Channel *ch) { set_a_duration(ch, offsetof(Protocol,p), false, true); }
 
 void set_channel_wave_amplitude(Channel *ch) {
   if (bufi >= 10) {
     Protocol *p = ensure_protocol(ch);
     if (assert_not_running(ch) && assert_is_wave(ch)) {
       p->q.s = 0;
-      p->q.u = six_out(buf + 3);
+      p->q.u = six_read(buf + 3);
     }
     // TODO -- error message if u > 2047.
     shiftbuf(10);
@@ -517,7 +564,7 @@ void set_channel(Channel *ch) {
     p->n = parse_time(buf + i); i += 7;
     p->p = parse_time(buf + i); i += 7;
     if (ch->pin != 255) p->q = parse_time(buf + i);
-    else { p->q.u = six_out(buf + i); p->q.s = 0; }
+    else { p->q.u = six_read(buf + i); p->q.s = 0; }
     i += 7;
     byte c = buf[i++];
     if (c == ';') p->i = 0; else if (c == 'i') p->i = 255; else die_with_message("bad invert");
@@ -532,9 +579,18 @@ void set_channel(Channel *ch) {
   }
 }
 
+void set_and_run_only_channel(Channel *ch) {
+  // TODO--actually do this
+}
+
 void append_protocol(Channel *ch) {
   // TODO--actually do it
 }
+
+
+/**************************************
+** Select which command to interpret **
+**************************************/
 
 void parse_command_on(Channel *ch, char who) {
   if (ch->disabled) {
@@ -568,34 +624,28 @@ void parse_command_on(Channel *ch, char who) {
   }
 }
 
-void abort_and_reset() {
-  shiftbuf(2);
-  if (running > 0) halt_channels();
-  running = 0;
+void interpret(char cmd) {
+  if      (cmd == '!') start_running();
+  else if (cmd == '$') report_errors();
+  else if (cmd == '?') report_timing();
+  else if (cmd == '>') shift_timing(1);
+  else if (cmd == '<') shift_timing(-1);
+  else if ((cmd >= '0' && cmd <= '9') || (cmd >= 'A' && cmd <= 'N'))
+                       parse_command_on(channels + DEHEXT(cmd), cmd);
+  else if (cmd == '@') parse_command_on(channels + DIG, '@');
+  else if (cmd == '.') abort_and_reset();
+  else if (cmd == '"') reset_parameters();
+  else if (cmd == ':') report_identity();
+  else if (cmd == '*') report_pins();
+  else                 raise_unknown_command_error(cmd, ' ');
 }
 
-void reset_parameters() {
-  shiftbuf(2);  // TODO--actually do something
-}
 
-void report_identity() {
-  shiftbuf(2);
-  Serial.println(whoamiN, DEC);
-  Serial.write(whoami, whoamiN);
-  Serial.send_now();
-}
+/*****************************************
+** State machine for stimuli and/or I/O **
+*****************************************/
 
-void report_pins() {
-  shiftbuf(2);
-  byte pinout[27];
-  int i = 0;
-  pinout[i++] = '~';
-  for (; i <= digiN; i++) pinout[i] = HEXTRI(digi[i-1]);
-  if (waveN > 0) pinout[i++] = '@';
-  pinout[i++] = '$';
-  Serial.write(pinout, i);
-  Serial.send_now();
-}
+int count_me = 0;
 
 // Loop runs forever (after setup)
 void loop() {
@@ -726,22 +776,9 @@ void loop() {
   // Interpret any fully buffered commands
   if (bufi > 1) {
     // NOTE--subcommands are responsible for checking for completeness and consuming input if it is complete!
-    char cmd = buf[1];
-    Serial.println(cmd,DEC);
+    Serial.println(buf[1],DEC);
     Serial.send_now();
-    if      (cmd == '!') start_running();
-    else if (cmd == '$') report_errors();
-    else if (cmd == '?') report_timing();
-    else if (cmd == '>') shift_timing(1);
-    else if (cmd == '<') shift_timing(-1);
-    else if ((cmd >= '0' && cmd <= '9') || (cmd >= 'A' && cmd <= 'N'))
-                         parse_command_on(channels + DEHEXT(cmd), cmd);
-    else if (cmd == '@') parse_command_on(channels + DIG, '@');
-    else if (cmd == '.') abort_and_reset();
-    else if (cmd == '"') reset_parameters();
-    else if (cmd == ':') report_identity();
-    else if (cmd == '*') report_pins();
-    else                 raise_unknown_command_error(cmd, ' ');
+    interpret(buf[1]);
   }
 
   // int r = ARM_DWT_CYCCNT;   // Read cycle count (effectively a 72 MHz clock)
