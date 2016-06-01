@@ -746,9 +746,9 @@ void loop() {
         digitalWrite(LED_PIN, HIGH);
         advance(&blinking, (running == 0) ? 20000 : ((running == -1) ? 30000 : 10000));
         blink_is_on = true;
+        Serial.println(bufi);
+        Serial.send_now();
       }
-      Serial.println(bufi);
-      Serial.send_now();
       count_me = 0;
     }
   }
