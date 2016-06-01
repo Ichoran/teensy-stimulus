@@ -4,7 +4,7 @@ Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 1,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
+Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
 
 ## Constructing Stimuli
 
@@ -20,19 +20,17 @@ TODO: example picture goes here.
 
 Teensy Stimulus has a simple serial protocol for communications.
 
-A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).
+A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There are no variable-length commands.
 
-A variable-length command starts with the symbol `^` and ends with the symbol `$`.
+Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `^` and end with `$`.
 
-The symbols ~, ^, and $ will ONLY appear at the beginning (`~`, `^`) or end (`$`) of a command.
+The symbols ~, ^, and $ will ONLY appear at the beginning (`~`, `^`) and/or end (`$`) of a command.  No escape sequences are permitted; if an invalid character needs to be returned it will be replaced with underscore `_`.
 
-Returned values start with the symbol `~` if they are fixed-length, or start with `^` and end with `$` if they are variable length.
-
-No command or return value may be longer than 60 bytes in addition to the starting `^` and ending `$` if any.  (So the longest possible message is 62 bytes.)  This constraint is to ensure that the command fits within one USB packet sent/received by the board.
+No command or return value may be longer than 60 bytes in addition to the starting `^` and ending `$` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits within one 64-byte USB packet sent/received by the board.
 
 ### Identifying a Teensy Stimulus device
 
-If you send the command `~:`, a Teensy Stimulus device will respond with a string that starts with `~stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer)
+If you send the command `~:`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer).
 
 ### Output channels
 
@@ -42,9 +40,9 @@ The analog output channel is specified by `Z` and is on pin A14/DAC.
 
 ### Durations and Other Numbers
 
-Teensy stimulus measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
+Teensy stimulus measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
 
-Note also that the internal clock on the Teensy 3.1 is not accurate to one part in ten million (or a hundred million), so the accuracy of these estimates should not be taken too seriously.  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
+Note also that the internal clock on the Teensy 3.1 is not accurate to one part in ten million (or a hundred million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
 
 ### Specifying a Stimulus Train
 
@@ -99,9 +97,9 @@ An annotated example is given below.
  \-------------------------------------------------------- Output channel specifier
 ```
 
-Analog stimuli must be set piece by piece.  Digital stimuli set all at once can be modified by further commands (to invert polarity, for instance).
+Analog stimuli must be set piece by piece.  Digital stimuli that are set all at once can be modified by further commands (to invert polarity, for instance).
 
-To immediately run the command on that single channel, discarding all other settings, use `*` in place of `=`.
+To immediately run the command on that single channel, discarding all other settings, use `*` in place of `=`.  (This only works when the system is not already running.)
 
 #### Chained Stimulus Trains
 
@@ -140,9 +138,9 @@ The Teensy Stimulus board will make a best effort to obey all the parameters set
 7. Total number of microseconds off for starting pulses (10 digits)
 8. Total number of microseconds off for ending pulses (10 digits)
 
-Overall, the reply is 61 bytes long.
+Overall, the reply is 61 bytes long.  There are no separators between the characters.
 
-For analog outputs, the difference between the target time for changing voltage and the actual time is reported instead of starting pulse edge values, and there are no stats for ending pulses.  This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this between stimuli or during debugging.
+This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this between stimuli or during debugging.
 
 ## Visual feedback
 
