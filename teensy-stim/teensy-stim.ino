@@ -124,12 +124,12 @@ void write_dura_15(Dura d, byte* target) {
 struct Protocol {
   Dura t;    // Total time
   Dura d;    // Delay
-  Dura y;    // Stimulus on time
-  Dura n;    // Stimulus off time
+  Dura s;    // Stimulus on time
+  Dura z;    // Stimulus off time
   Dura p;    // Pulse time (or period, for analog)
   Dura q;    // Pulse off time (analog: amplitude 0-2047 stored as microseconds)
   byte i;    // Invert? 'i' == yes, otherwise no
-  byte s;    // Shape: 'l' = sinusoidal, 'r' = triangular, other = digital
+  byte j;    // Shape: 'l' = sinusoidal, 'r' = triangular, other = digital
   byte next; // Number of next protocol, 255 = none
   byte chan; // Channel number, 255 = none
 };
@@ -138,6 +138,22 @@ Protocol protocols[255];
 
 void init_protocol(Protocol *p) {
   *p = {{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, 'u', ' ', 255, 255 };
+}
+
+bool parse_one_dura_to_protocol(byte *input, Protocol *p) {
+  Dura d = parse_dura(input + 1, 8);
+  if (d.s < 0 || d.k < 0) return false;
+  switch (input*) {
+    case 't': p->t = d; break;
+    case 'd': p->d = d; break;
+    case 's': p->s = d; break;
+    case 'z': p->z = d; break;
+    case 'p': p->p = d; break;
+    case 'q': p->q = d; break;
+    case 'w': p->p = d; break;
+    default: return false;
+  }
+  return true;
 }
 
 struct Channel {
