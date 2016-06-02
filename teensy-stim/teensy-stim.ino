@@ -5,37 +5,140 @@
 #include <EEPROM.h>
 #include <math.h>
 
+#define MHZ 72
+
 int lo = LOW;
 int hi = HIGH;
 
-#define LED_PIN 13
-#define PROT 254
-#define CHAN 25
 #define DIG 24
+int digi[DIG] = { 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+int led_is = 23;
 
-int waveN = 1;
-int digiN = DIG;
-int digi[DIG];
+#define ANA 1
+int16_t wave[ANA][256];
 
-int16_t wave[256];
+
+/*******************************
+ * Duration class, effectively *
+ *******************************/
 
 struct Dura {
-  int s;
-  int u;
+  int s;  // Seconds
+  int k;  // Clock ticks
 };
+
+bool valid_dura(Dura d) {
+  return d.s >= 0 && d.k >= 0;
+}
+
+int compare_dura(Dura a, Dura b) {
+  if (a.s < b.s) return -1;
+  else if (a.s > b.s) return 1;
+  else {
+    if (a.k < b.k) return -1;
+    else if (a.k > b.k) return 1;
+    else return 0;
+  }
+}
+
+bool lt_dura(Dura a, Dura b) {
+  return (a.s < b.s) || ((a.s == b.s) && (a.k < b.k));
+}
+
+void normalize_dura(Dura *d) {
+  if (d->k >= MHZ*1000000) {
+    int xs = d->u / (MHZ*1000000);
+    d->s += xs;
+    d->u -= xs*(MHZ*1000000);
+  }
+  else if (d->k < 0) {
+    int xs = ((MHZ*1000000 - 1) - d->us)/(MHZ*1000000);
+    d->s += xs;
+    d->u += MHZ*1000000*xs;
+  }  
+}
+
+void add_dura_us(Dura *d, int us) {
+  d->k += us*MHZ;
+  normalize_dura(d);
+}
+
+void add_dura_s(Dura *d, int s) {
+  d->s += s;
+}
+
+void add_dura_dura(Dura *d, Dura x) {
+  add_dura_s(d, x.s);
+  d->k += x.k;
+  normalize_dura(d);
+}
+
+Dura parse_dura(byte* input, int n) {
+  int s = 0;
+  int u = 0;
+  int nu = 0;
+  int i = 0;
+  // Seconds before decimal point
+  for (; i<n && input[i] != '.'; i++) {
+    byte b = input[i] - '0';
+    if (b < 10) s = s*10 + b;
+    else return (Dura){-1, -1};
+  }
+  if (i+1 < n) {
+    // Found decimal point with space afterwards.  Fractions of a second.
+    i++;
+    for (; i<n && nu < 6; i++, nu++) {
+      byte b = input[i] - '0';
+      if (b < 10) u = u*10 + b;
+      else return (Dura){-1, -1};
+    }
+    for (; nu < 6; nu++) u = u*10;   // Pad out to microseconds
+  }
+  return (Dura){s, u*MHZ};
+}
+
+void write_dura_8(Dura d, byte* target) {
+  int es = 10000000
+  int x = 0
+  int eu = MHZ*100000
+  int i = 0
+  for (; es > 0 && (x = (d.s/es)%10) == 0; es /= 10) {}
+  for (; es > 0; es /= 10, i++) { x = (d.s/es)%10; target[i] = (byte)(x + '0'); }
+  if (i == 0) { target[0] = '0'; target[1] = '.'; i = 2; }
+  else if (i < 8) { target[i++] = '.'; }
+  for (; i < 8 && eu >= MHZ; eu /= 10, i++) { x = (d.k/eu)%10; target[i] = (byte)(x + '0'); }
+}
+
+void write_dura_15(Dura d, byte* target) {
+  int i = 0;
+  for (int es =   10000000; es >    0; es /= 10, i++) target[i] = (byte)('0' + ((d.s/es)%10));
+  target[i++] = '.';
+  for (int eu = MHZ*100000; eu >= MHZ; eu /= 10, i++) target[i] = (byte)('0' + ((d.k/eu)%10));
+}
+
+
+/************************
+ * Protocol information *
+ ************************/
 
 struct Protocol {
   Dura t;    // Total time
   Dura d;    // Delay
   Dura y;    // Stimulus on time
   Dura n;    // Stimulus off time
-  Dura p;    // Pulse time
-  Dura q;    // Pulse off time
-  byte i;    // Invert? 0 = no
-  byte s;    // Shape: 0 = digital, 1 = sinusoidal, 2 = triangular
+  Dura p;    // Pulse time (or period, for analog)
+  Dura q;    // Pulse off time (analog: amplitude 0-2047 stored as microseconds)
+  byte i;    // Invert? 'i' == yes, otherwise no
+  byte s;    // Shape: 'l' = sinusoidal, 'r' = triangular, other = digital
   byte next; // Number of next protocol, 255 = none
-  byte used; // 0 = unused, otherwise (channel # + 1)
+  byte chan; // Channel number, 255 = none
 };
+
+Protocol protocols[255];
+
+void init_protocol(Protocol *p) {
+  *p = {{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, 'u', ' ', 255, 255 };
+}
 
 struct Channel {
   Dura t;        // Time remaining
