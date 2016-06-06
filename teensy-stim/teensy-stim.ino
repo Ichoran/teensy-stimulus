@@ -28,6 +28,10 @@ struct Dura {
   int k;  // Clock ticks
 };
 
+bool dura_is_empty(Dura d) {
+  return d.s == 0 && d.k == 0;
+}
+
 bool valid_dura(Dura d) {
   return d.s >= 0 && d.k >= 0 && d.k < HTZ;
 }
@@ -211,15 +215,15 @@ void write_channel_error(ChannelError *ce, byte *target) {
   int pm = (ce->pmiss > 999999 || ce->pmiss < 0) ? 999999 : ce->pmiss;
   int e0 = ce->emax0 / MHZ; e0 = (e0 > 99999 || e0 < 0) ? 99999 : e0;
   int e1 = ce->emax1 / MHZ; e1 = (e1 > 99999 || e1 < 0) ? 99999 : e1;
-  int64_t t0 = dura_as_us(ce->toff0); t0 = (t0 > 9999999999ll || t0 < 0) ? 0 : t0;
-  int64_t t1 = dura_as_us(ce->toff1); t1 = (t1 > 9999999999ll || t1 < 0) ? 0 : t1;
+  int64_t t0 = dura_as_us(ce->toff0); t0 = (t0 > 9999999999ll || t0 < 0) ? 9999999999ll : t0;
+  int64_t t1 = dura_as_us(ce->toff1); t1 = (t1 > 9999999999ll || t1 < 0) ? 9999999999ll : t1;
   snprintf(target, 60, "%09d%06d%09d%06d%05d%05d%10lld%10lld", ns, sm, np, pm, e0, e1, t0, t1);
 }
 
 #define C_ZZZ 0
-#define C_OFF 1
-#define C_STM 2
-#define C_PLS 3
+#define C_WAIT 1
+#define C_LO 2
+#define C_HI 3
 
 struct Channel {
   Dura t;         // Time remaining
@@ -252,7 +256,7 @@ void init_all_channels(Channel *cs) {
 void refresh_channel(Channel *c) {
   c->e = (ChannelError){0, 0, 0, 0, 0, 0, 0, 0};
   c->t = c->yn = c->pq = (Dura){0, 0};
-  c->runlevel = 0;
+  c->runlevel = C_ZZZ;
   c->who = zero;
 }
 
@@ -290,13 +294,13 @@ bool channel_run_next_protocol(Channel *c, Protocol *ps) {
   if (p->next < 255) {
     p = ps + p->next;
     channel_pin_off(c, ps);
-    c->runlevel = 1;
+    c->runlevel = C_WAIT;
     c->t = p->t;
     c->yn = p->d;
   }
   else {
     c->who = 255;
-    c->runlevel = 0;
+    c->runlevel = C_ZZZ;
     c->disabled = 1;
     return false;
   }
@@ -306,8 +310,8 @@ Dura channel_advance(Channel *c, Dura d, Protocol *ps) {
   bool started_yn = false;
   bool started_pq = false;
 tail_recurse:
-  if (c->disabled || c->runlevel == 0) return (Dura){0,0};
-  if (c->runlevel == 1) {
+  if (c->disabled || c->runlevel == C_ZZZ) return (Dura){0,0};
+  if (c->runlevel == C_WAIT) {
     // Only relevant times are c->t and c->yn
     bool use_yn = lt_dura(c->yn, c->d);
     Dura *x = use_yn ? &(c->yn) : &(c->t);
@@ -323,7 +327,7 @@ tail_recurse:
         channel_pin_on(c, ps);
         started_yn = true;
         started_pq = true;
-        c->runlevel = 3;
+        c->runlevel = C_HI;
         c->pq = ps[c->who].q;
         c->yn = ps[c->who].s;
         c->e.nstim++;
@@ -355,25 +359,25 @@ tail_recurse:
       if (pq_first) {
         sub_duras(&(c->yn), c->pq);
         sub_duras(&(c->t), c->pq);
-        if (c->runlevel == 2) {
+        if (c->runlevel == C_LO) {
           channel_pin_on(c, ps);
           started_pq = true;
-          c->runlevel = 3;
+          c->runlevel = C_HI;
           c->pq = ps[c->who].q;
           c->e.npuls++;
           // TODO--timing errors here!
         }
         else {
           channel_pin_off(c, ps);
-          c->runlevel = 2;
+          c->runlevel = C_LO;
           c->pq = ps[c->who].q;
           if (started_pq) { started_pq = false; c->e.pmiss++; }
         }
       }
       else if (yn_first) {
         sub_duras(&(c->t), c->pq);
-        if (c->runlevel == 3) channel_pin_off(c, ps);
-        c->runlevel = 1;
+        if (c->runlevel == C_HI) channel_pin_off(c, ps);
+        c->runlevel = C_WAIT;
         c->yn = ps[c->who].z;
         if (started_pq) { started_pq = false; c->e.pmiss++; }
         if (started_yn) { started_yn = false; c->e.nmiss++; }
@@ -387,6 +391,17 @@ tail_recurse:
       goto tail_recurse;
     }
   }
+}
+
+Dura channel_advance_all_digital(Channel *cs, Dura d, Protocol *ps) {
+  Dura x = (Dura){0, 0};
+  for (int i = 0; i < DIG; i++) if (!cs[i].disabled) {
+    Dura y = channel_advance(cs+i, d, ps);
+    if (!dura_is_empty(y)) {
+      if (dura_is_empty(x) || lt_dura(y, x)) x = y;
+    }
+  }
+  x;
 }
 
 
