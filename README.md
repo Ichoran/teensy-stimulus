@@ -30,7 +30,7 @@ No command or return value may be longer than 60 bytes in addition to the starti
 
 ### Identifying a Teensy Stimulus device
 
-If you send the command `~:`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer).
+If you send the command `~:`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer), followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
 
 ### Output channels
 
@@ -42,7 +42,7 @@ The analog output channel is specified by `Z` and is on pin A14/DAC.
 
 Teensy stimulus measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
 
-Note also that the internal clock on the Teensy 3.1 is not accurate to one part in ten million (or a hundred million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
+Note also that the internal clock on the Teensy 3.1 is not accurate to one part in a hundred million (or even one in a million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
 
 ### Specifying a Stimulus Train
 
@@ -58,8 +58,8 @@ Then, any values are given.  Typically, this is an eight-character duration spec
 
 An example for each parameter is given below:
 
-| Quantity | Command Char | Value | Analog/Digital? | Example | Explanation |
-|----------|--------------|-------|-----------------|---------|-------------|
+| Quantity | Char | Value | A/D? | Example | Explanation |
+|----------|------|-------|------|---------|-------------|
 | total duration | `t` | duration | either  | `~At00000120` | Output `A`'s stimulus train will end after 120 seconds |
 | initial delay  | `d` | duration | either  | `~Ad00000030` | Output `A` will wait 30 seconds before doing anything |
 | stimulus on    | `s` | duration | either  | `~Ay0000.300` | Each stimulus for `A` will be on for 300 ms |
@@ -67,9 +67,9 @@ An example for each parameter is given below:
 | pulse on       | `p` | duration | digital | `~Ap0.004500` | Within `A`'s stimulus, turn on the signal for 4.5 ms... |
 | pulse off      | `q` | duration | digital | `~Aq0.005500` | ...then off for 5.5 ms (10 ms total, for 30 pulses / stimulus) |
 | wave period    | `w` | duration | analog  | `~Zw0.004170` | Analog output for 239.8 Hz (note: minimum period is 1 ms) |
-| wave amplitude | `a` | 0000-2047 | analog | `~Za2000`    | Near-maximum amplitude wave. |
-| upright        | `u` | none     | either  | `~Au`        | Invert the normal sign: digital signals start high and go low, sine starts down instead of up |
-| inverted       | `i` | none     | either  | `~Ai`        | Invert the normal sign: digital signals start high and go low, sine starts down instead of up |
+| wave amplitude | `a` | 0000-2047 | analog | `~Za2000`    | Near-maximum amplitude wave.  (Values 0-2047.) |
+| upright        | `u` | none     | either  | `~Au`        | Normal sign: digital goes low to high, sine starts up |
+| inverted       | `i` | none     | either  | `~Ai`        | Inverted sign: digital goes high to low, sine starts down |
 | sinusoidal     | `l` | none     | analog  | `~Zl`        | Analog output will be sinusoidal (overrides `r`) |
 | triangular     | `r` | none     | analog  | `~Zr`        | Analog output will be triangular (overrides `l`) |
 
@@ -103,11 +103,7 @@ To immediately run the command on that single channel, discarding all other sett
 
 #### Chained Stimulus Trains
 
-Stimulus trains can be chained one after another.
-
-To clear all trains for one stimulus channel, use `.`, e.g. `~A.`  The channel `A` will be set to have only a single train, with all values set to zero.  To clear everything from all stimulus channels, use `~.`.
-
-To add a new train after the existing specified one, use `+`, e.g. `~A+`.  All commands regarding this output pin will apply only to the second train after this command executes.  The second train will be initialized with zero values, and will begin executing as soon as the time on the first train elapses.
+Stimulus trains can be chained one after another.  To add a new train after the existing specified one, use `+`, e.g. `~A+`.  All commands regarding this output pin will apply only to the second train after this command executes.  The second train will be initialized with zero values, and will begin executing as soon as the time on the first train elapses.
 
 A maximum of 254 trains can be stored across all pins.  Each of the 25 initial pins reserves one train to begin with, leaving 229 free for extensions.
 
@@ -121,9 +117,7 @@ To run a stimulation protocol on all defined channels, send the command `~!`.  T
 
 To terminate a stimulation protocol in progress, send the command `~/`.  To terminate a single channel while leaving any others still running, use `~A/`.  Once terminated, a channel cannot be restarted.
 
-After a run is complete, the previous program remains intact.  Use `~.` to reset all commands, or `~A.` to do it channel by channel.
-
-To ask the board to tell what time point it is at, send the command `~?`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error,it will return `^an error message here$`.
+To ask the board to tell what time point it is at, send the command `~?`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `^an error message here$`.
 
 To query the state machine that runs an individual channel, send the command `~A$` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.
 
@@ -135,12 +129,18 @@ The Teensy Stimulus board will make a best effort to obey all the parameters set
 4. The number of pulses that were missed (6 digits)
 5. Max error for starting a pulse, in microseconds (5 digits)
 6. Max error for ending a pulse, in microseconds (5 digits)
-7. Total number of microseconds off for starting pulses (10 digits)
-8. Total number of microseconds off for ending pulses (10 digits)
+7. Cumulative number of microseconds of error for starting pulses (10 digits)
+8. Cumulative number of microseconds of error for ending pulses (10 digits)
 
 Overall, the reply is 61 bytes long.  There are no separators between the characters.
 
 This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this between stimuli or during debugging.
+
+### Resetting
+
+After a run is complete, the previous program remains intact.  Before setting parameters or running again, the program needs to be cleared or reset.
+
+To clear all stimuli, use `~.`.  To refresh stimuli (to run the same protocol again), use `~"`.  One cannot run a protocol or modify it after a run is complete unless it is either cleared or refreshed.  A refreshed protocol can be modified (but only the last stimulus train(s) are available).
 
 ## Visual feedback
 
@@ -170,39 +170,45 @@ TODO: write this.
 
 ### Channel-Independent Commands
 
-**Command string starts with `~`, followed by command char.**
+*The command string starts with `~` and is followed by a single command char.*
 
 #### No Parameters
 
-| Command | Command Char | Result? | Additional Description |
+| Command | Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Check errors | `$` | 2 chars: `~!` if error, otherwise `~.` | |
-| Abort        | `.` | None | Stops any running protocol.  Also clears error state. |
-| Run          | `!` | None | Starts all protocols running.  Sets error state if there is no protocol or one is running. |
-| Report       | `?` | 15 chars: `~01234567.654321` or `^error message$` | Timestamp is 0 if not running. |
-| Identity     | `:` | 10-22 chars: `^stim1.0 ` + message + `$` | message should contain identity of unit |
+| Check errors | `$` | 2 chars | `~!` if error, otherwise `~.` |
+| Abort        | `/` | None | Stops any running protocol. |
+| Clear        | `.` | None | Clears errors & protocols. |
+| Refresh      | `"` | None | Restores protocols from prior run to use again. |
+| Run          | `!` | None | Starts all protocols running.  (Error if already running.) |
+| Report       | `?` | 15 chars | `~01234567.654321` or `^error message$`; time == 0 if not running. |
+| Identity     | `:` | 10-22 chars | `^stim1.0 ` + message + `$` |
 
 ### Channel-Dependent Commands
 
-**Command string starts with `~`, followed by channel number: `A` to `X` are digital channels; `Z` is analog.**
+*The command string starts with `~`, followed by channel number: `A` to `X` are digital channels; `Z` is analog.*
 
 #### No Parameters
 
-| Command | Command Char | Result? | Additional Description |
+*The command start character and channel number are followed by a single command character.*
+
+| Command | Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Abort run       | `.` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
-| Run alone       | `!` | None | Runs this output channel protocol alone.  Sets error state if another protocol is running. |
-| Check state     | `$` | 5 chars: one run level, `;`, three digit train number | See text for details |
-| Check quality   | `#` | 60 chars: 8 decimal numbers | See text for details |
+| Abort run       | `/` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
+| Run alone       | `!` | None | Runs this output channel protocol alone.  (Must not be running.) |
+| Check state     | `$` | 5 chars | Run level digit, `;`, three digit train number. See text for details. |
+| Check quality   | `#` | 60 chars | 8 decimal numbers. See text for details |
 | Usual polarity  | `u` | None | Stimuli are low-to-high (digital) or waveform is normal (analog). |
-| Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog).  Raises error if running. |
-| Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal.  Raises error if running or applied to digital channel. |
-| Triangular      | `r` | None | Analog stimulus should be triangular.  Raises error if running or applied to digital channel. |
-| Append train    | `+` | None | Existing stimulus train is saved and a new one is set to follow the existing one |
+| Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
+| Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal. |
+| Triangular      | `r` | None | Analog stimulus should be triangular. |
+| Append train    | `+` | None | Adds and switches to a new stimulus train to follow the existing one. |
 
 #### With Parameters
 
-| Command | Command Char | Parameter | Result? | Additional Description |
+*The command start character and channel number are followed by a command character and a parameter (specified below).*
+
+| Command | Char | Parameter | Result? | Additional Description |
 |---------|--------------|-----------|---------|------------------------|
 | Set total time        | `t` | 8 chars: duration | None | |
 | Set initial delay     | `d` | 8 chars: duration | None | |
@@ -211,6 +217,42 @@ TODO: write this.
 | Set pulse on time     | `p` | 8 chars: duration | None | Digital channels only. |
 | Set pulse off time    | `q` | 8 chars: duration | None | Digital channels only. |
 | Set period            | `w` | 8 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
-| Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Max value 2047.  Time unit is ignored. |
+| Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Values from 0 to 2047. |
 | Set full protocol     | `=` | 53 chars: 6x8 durations + 5 `;` | None | Digital channels only. |
-| Set and run protocol  | `*` | 53 chars: same as `=` | None | Raises error if protocol is already running. Runs this channel alone. |
+| Set and run protocol  | `*` | 53 chars: same as `=` | None | Clears all other protocols. |
+
+## Examples
+
+#### Single event protocol
+
+Suppose we wish to open a valve for 10s after 1500s.  We can set this protocol to run on the first channel as follows:
+
+```
+~A=00001510;00001500;00000010;0000001;00000010;0000001
+```
+
+Note that the stimulus and pulse times are set to be the same for simplicity, and the off times for each do not really matter as the entire protocol will end then.
+
+#### Multi-train protocol
+
+Suppose we wish to have a digital stimulus that consists of a single pulse of 6 ms.  Suppose further than we wish to wait for 300 seconds, then deliver 50 of these stimuli at 20 second intervals, followed by a 120 second delay and a single test pulse, followed by another 180 second delay and another test pulse.  We can instruct the board to run this protocol on the first output (pin 14) as follows:
+
+```
+~A=00001290;00000300;00.00600;19.99400;0.006000;0.000001
+~A+
+~A=00000120;00000110;00.00600;19.99400;0.006000;0.000001
+~A+
+~A=0170.006;0170.000;00.00600;19.99400;0.006000;0.000001
+```
+
+There are a few things to note about this protocol.  First, some dead time is included after the last stimulus in each case: 10 seconds for the first and second trains.  Second, the up/down time is kept at 6 ms / (20s - 6ms) for the single test pulses just to be consistent (it doesn't matter since the protocol ends before the downtime is complete).  Third, since only a single pulse is desired, the pulse up time is set at least as long as the stimulus on time, which gives just a single pulse.  It would also work to exaggerate the length of the stimulus on time, and have the pulse on/off cycle long enough so there wasn't a second pulse.  For example,
+
+```
+~A=00000120;00000110;01.00000;19.00000;0.006000;1.994000
+```
+
+would work just as well to give a single 6 ms pulse (because the pulse up time of 1s expires before pulse time of 6 ms + pulse down time of 1994 ms).
+
+## Revision Notes
+
+Initial revision.

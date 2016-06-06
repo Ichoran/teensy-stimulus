@@ -6,6 +6,7 @@
 #include <math.h>
 
 #define MHZ 72
+#define HTZ 72000000
 
 int lo = LOW;
 int hi = HIGH;
@@ -28,7 +29,7 @@ struct Dura {
 };
 
 bool valid_dura(Dura d) {
-  return d.s >= 0 && d.k >= 0;
+  return d.s >= 0 && d.k >= 0 && d.k < HTZ;
 }
 
 int compare_dura(Dura a, Dura b) {
@@ -46,15 +47,15 @@ bool lt_dura(Dura a, Dura b) {
 }
 
 void normalize_dura(Dura *d) {
-  if (d->k >= MHZ*1000000) {
-    int xs = d->u / (MHZ*1000000);
+  if (d->k >= HTZ) {
+    int xs = d->k / (HTZ);
     d->s += xs;
-    d->u -= xs*(MHZ*1000000);
+    d->k -= xs*HTZ;
   }
   else if (d->k < 0) {
-    int xs = ((MHZ*1000000 - 1) - d->us)/(MHZ*1000000);
+    int xs = ((HTZ - 1) - d->k)/HTZ;
     d->s += xs;
-    d->u += MHZ*1000000*xs;
+    d->u += HTZ*xs;
   }  
 }
 
@@ -67,10 +68,20 @@ void add_dura_s(Dura *d, int s) {
   d->s += s;
 }
 
-void add_dura_dura(Dura *d, Dura x) {
-  add_dura_s(d, x.s);
+void add_duras(Dura *d, Dura x) {
+  d->s += x.s;
   d->k += x.k;
-  normalize_dura(d);
+  while (d->k >= HTZ) { d->k -= HTZ; d->s += 1; }
+}
+
+void sub_duras(Dura *d, Dura x) {
+  d->s -= x.s;
+  d->k -= x.k;
+  while (d->k < 0) { d->k += HTZ; d->s -= 1; }
+}
+
+int64_t dura_as_us(Dura d) {
+  return (((int64_t)d.s)*HTZ + d.k)/MHZ;
 }
 
 Dura parse_dura(byte* input, int n) {
@@ -134,13 +145,21 @@ struct Protocol {
   byte chan; // Channel number, 255 = none
 };
 
-Protocol protocols[255];
+#define PROT 254;
+Protocol protocols[PROT];
+int proti = DIG+ANA;
 
 void init_protocol(Protocol *p) {
   *p = {{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, 'u', ' ', 255, 255 };
 }
 
-bool parse_one_dura_to_protocol(byte *input, Protocol *p) {
+void init_all_protocols(Protocol *ps) {
+  for (int i = 0; i < DIG+ANA; i++) init_protocol(ps + i);
+  for (int i = DIG; i < DIG+ANA; i++) ps[i].j = 'l';
+  proti = DIG+ANA;
+}
+
+bool parse_labeled_dura_to_protocol(byte *input, Protocol *p) {
   Dura d = parse_dura(input + 1, 8);
   if (d.s < 0 || d.k < 0) return false;
   switch (input*) {
@@ -156,25 +175,297 @@ bool parse_one_dura_to_protocol(byte *input, Protocol *p) {
   return true;
 }
 
+bool parse_all_duras_to_protocol(byte *input, Protocol *p) {
+  for (int i = 1; i < 5; i++) if (input[i*8] != ';') return false;
+  Dura d;
+  // Manually unrolled loop
+  d = parse_dura(input, 0*9); if (!valid_dura(d)) return false; p->t = d;
+  d = parse_dura(input, 1*9); if (!valid_dura(d)) return false; p->d = d;
+  d = parse_dura(input, 2*9); if (!valid_dura(d)) return false; p->s = d;
+  d = parse_dura(input, 3*9); if (!valid_dura(d)) return false; p->z = d;
+  d = parse_dura(input, 4*9); if (!valid_dura(d)) return false; p->p = d;
+  d = parse_dura(input, 5*9); if (!valid_dura(d)) return false; p->q = d;
+  return true;
+}
+
+
+/*********************************
+ * Channel information & running *
+ *********************************/
+
+struct ChannelError {
+  int nstim;     // Number of stimuli scheduled to start
+  int smiss;     // Number of stimuli missed entirely
+  int npuls;     // Number of pulses scheduled to start
+  int pmiss;     // Number of pulses missed entirely
+  int emax0;     // Biggest absolute error in pulse start timing (clock ticks)
+  int emax1;     // Biggest absolute error in pulse end timing (clock ticks)
+  Dura toff0;    // Total error in pulse start timing
+  Dura toff1;    // Total error in pulse end timing  
+}
+
+void write_channel_error(ChannelError *ce, byte *target) {
+  int ns = (ce->nstim > 999999999 || ce->nstim < 0) ? 999999999 : ce->nstim;
+  int sm = (ce->smiss > 999999 || ce->smiss < 0) ? 999999 : ce->smiss;
+  int np = (ce->npuls > 999999999 || ce->npuls < 0) ? 999999999 : ce->npuls;
+  int pm = (ce->pmiss > 999999 || ce->pmiss < 0) ? 999999 : ce->pmiss;
+  int e0 = ce->emax0 / MHZ; e0 = (e0 > 99999 || e0 < 0) ? 99999 : e0;
+  int e1 = ce->emax1 / MHZ; e1 = (e1 > 99999 || e1 < 0) ? 99999 : e1;
+  int64_t t0 = dura_as_us(ce->toff0); t0 = (t0 > 9999999999ll || t0 < 0) ? 0 : t0;
+  int64_t t1 = dura_as_us(ce->toff1); t1 = (t1 > 9999999999ll || t1 < 0) ? 0 : t1;
+  snprintf(target, 60, "%09d%06d%09d%06d%05d%05d%10lld%10lld", ns, sm, np, pm, e0, e1, t0, t1);
+}
+
+#define C_ZZZ 0
+#define C_OFF 1
+#define C_STM 2
+#define C_PLS 3
+
 struct Channel {
-  Dura t;        // Time remaining
-  Dura yn;       // Time until next stimulus status switch
-  Dura pq;       // Time until next pulse status switch
-  byte runlevel; // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
-  byte pin;      // The digital pin number for this output, or 255 = analog out
-  byte disabled; // Channel may not be used unless it is 0
-  byte protocol; // Which protocol we're running now, 255 = none
-  byte protzero; // Initial protocol to start at (used only for resetting), 255 = none
-  byte protidx;  // Counts up as we walk through protocols
+  Dura t;         // Time remaining
+  Dura yn;        // Time until next stimulus status switch
+  Dura pq;        // Time until next pulse status switch
+  byte runlevel;  // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
+  byte pin;       // The digital pin number for this output, or 255 = analog out
+  byte disabled;  // Channel will not run unless this has value 0
+  byte who;       // Which protocol we're running now, 255 = none
+  byte zero;      // Initial protocol to start at (used only for resetting), 255 = none
   byte unused0;
   byte unused1;
+  byte unused2;
+  ChannelError e; // Error statistics
 };
 
-int protoi = 0;            // Index of next empty protocol slot
-int proton = 0;            // Total number of protocols
-Protocol protocols[PROT];  // Slots for protocols (not necessarily contiguous)
-
+#define CHAN (DIG+ALA)
 Channel channels[CHAN];
+
+void init_channel(int index, Channel *c) {
+  c = (Channel){ {0, 0}, {0, 0}, {0, 0}, 0, 0, 1, 255, 255, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0} };
+  c->pin = (index < DIG) ? digi[index] : 255;
+  c->zero = (index < DIG) ? index : 255;
+}
+
+void init_all_channels(Channel *cs) {
+  for (int i = 0; i < CHAN; i++) init_channel(i, cs+i);
+}
+
+void refresh_channel(Channel *c) {
+  c->e = (ChannelError){0, 0, 0, 0, 0, 0, 0, 0};
+  c->t = c->yn = c->pq = (Dura){0, 0};
+  c->runlevel = 0;
+  c->who = zero;
+}
+
+void refresh_all_channels(Channel *cs) {
+  for (int i = 0; i < CHAN; i++) refresh_channel(cs+i);
+}
+
+void channel_pin_low(Channel *c) {
+  if (c->who != 255) digitalWrite(pin, LOW);
+}
+
+void channel_pin_high(Channel *c) {
+  if (c->who != 255) digitalWrite(pin, HIGH);
+}
+
+void channel_pin_off(Channel *c, Protocol *ps) {
+  byte w = c->who;
+  if (w != 255) {
+    if (ps[w].i == 'i') digitalWrite(pin, HIGH);
+    else                digitalWrite(pin, LOW);
+  }
+}
+
+void channel_pin_on(Channel *c, Protocol *ps) {
+  byte w = c->who;
+  if (w != 255) {
+    if (ps[w].i == 'i') digitalWrite(pin, LOW);
+    else                digitalWrite(pin, HIGH);
+  }
+}
+
+bool channel_run_next_protocol(Channel *c, Protocol *ps) {
+  Protocol *p = ps + c->who;
+  channel_pin_low(c);
+  if (p->next < 255) {
+    p = ps + p->next;
+    channel_pin_off(c, ps);
+    c->runlevel = 1;
+    c->t = p->t;
+    c->yn = p->d;
+  }
+  else {
+    c->who = 255;
+    c->runlevel = 0;
+    c->disabled = 1;
+    return false;
+  }
+}
+
+Dura channel_advance(Channel *c, Dura d, Protocol *ps) {
+  bool started_yn = false;
+  bool started_pq = false;
+tail_recurse:
+  if (c->disabled || c->runlevel == 0) return (Dura){0,0};
+  if (c->runlevel == 1) {
+    // Only relevant times are c->t and c->yn
+    bool use_yn = lt_dura(c->yn, c->d);
+    Dura *x = use_yn ? &(c->yn) : &(c->t);
+    if (lt_dura(d, *x)) {
+      sub_duras(c->yn, d);
+      sub_duras(c->t, d);
+      return *x;
+    }
+    else {
+      sub_duras(&d, *x);
+      if (use_yn) {
+        sub_duras(&(c->t), c->yn);
+        channel_pin_on(c, ps);
+        started_yn = true;
+        started_pq = true;
+        c->runlevel = 3;
+        c->pq = ps[c->who].q;
+        c->yn = ps[c->who].s;
+        c->e.nstim++;
+        c->e.npuls++;
+        // TODO--timing errors here!
+      }
+      else {
+        channel_pin_low(c);
+        if (started_yn) { started_yn = false; c->e.nmiss++; }
+        if (started_pq) { started_pq = false; c->e.pmiss++; }
+        channel_run_next_protocol(c, ps);
+      }
+      goto tail_recurse;   // Functionally: return channel_advance(c, d, ps, started_yn, started_pq);      
+    }
+  }
+  else {
+    // Relevant times are c->t, c->yn, and c->pq
+    bool pq_first = lt_dura(c->pq, c->yn) && lt_dura(c->pq, c->t);
+    bool yn_first = !pq_first && lt_dura(c->yn, c->t);
+    Dura *x = pq_first ? &(c->pq) : (yn_first ? &(c->yn) : &(c->t));
+    if (lt_dura(d, *x)) {
+      sub_duras(&(c->pq), d);
+      sub_duras(&(c->yn), d);
+      sub_duras(&(c->t), d);
+      return *x;
+    }
+    else {
+      sub_duras(&d, *x);
+      if (pq_first) {
+        sub_duras(&(c->yn), c->pq);
+        sub_duras(&(c->t), c->pq);
+        if (c->runlevel == 2) {
+          channel_pin_on(c, ps);
+          started_pq = true;
+          c->runlevel = 3;
+          c->pq = ps[c->who].q;
+          c->e.npuls++;
+          // TODO--timing errors here!
+        }
+        else {
+          channel_pin_off(c, ps);
+          c->runlevel = 2;
+          c->pq = ps[c->who].q;
+          if (started_pq) { started_pq = false; c->e.pmiss++; }
+        }
+      }
+      else if (yn_first) {
+        sub_duras(&(c->t), c->pq);
+        if (c->runlevel == 3) channel_pin_off(c, ps);
+        c->runlevel = 1;
+        c->yn = ps[c->who].z;
+        if (started_pq) { started_pq = false; c->e.pmiss++; }
+        if (started_yn) { started_yn = false; c->e.nmiss++; }
+      }
+      else {
+        channel_pin_low(c, ps);
+        if (started_yn) { started_yn = false; c->e.nmiss++; }
+        if (started_pq) { started_pq = false; c->e.pmiss++; }
+        channel_run_next_protocol(c, ps);
+      }
+      goto tail_recurse;
+    }
+  }
+}
+
+
+/*************************
+ * Error and I/O buffers *
+ *************************/
+
+#define MSGN 62
+#define WHON 62
+#define BUFN 128
+
+byte msg[MSGN];
+int errn = 0;
+
+byte whoami[WHON];
+byte buf[BUFN];
+int bufi = 0;
+
+int shift_buffer(byte* buffer, int iN, int shift) {
+  if (shift > iN) return 0;
+  if (shift < 1) return iN;
+  for (int j = shift; j < iN; j++) buffer[j-shift] = buffer[shift];
+  return iN - shift;
+}
+
+int advance_command(byte* buffer, int i0, int iN) {
+  int i = 0;
+  while (i < iN) {
+    byte b = buffer[i];
+    if (b == '~' || b == '^') break;
+    i++;
+  }
+  return shift_buffer(buffer, iN, i);
+}
+
+void drain_to_buf() {
+  int av = Serial.available();
+  while ((av--) > 0 && bufi < BUFN) buf[bufi++] = Serial.read();
+}
+
+void write_from_msg() {
+  if (errn > 0) Serial.write(msg, errn);
+  else {
+    int n = 0;
+    while (n < MSGN && msg[n] != 0) n++;
+    Serial.write(msg, n);
+  }
+  Serial.send_now();
+}
+
+void write_who_am_i() {
+  int n = 0;
+  for (; n < WHON && whoami[n] != 0; n++) msg[n] = whoami[n];
+  Serial.write(msg, n);
+  Serial.send_now();
+}
+
+
+/***********
+ * Runtime *
+ ***********/
+
+volatile int tick;       // Last CPU clock count
+Dura global_clock;       // Time since start of running.
+Dura next_event;         // Time of next event.  Just busywait until then.
+
+#define ERRDONE -2
+#define ERRSTOP -1
+#define RUNSTOP  0
+#define RUNSET   1
+#define GOGOGO   2
+volatile int runlevel;   // -2 error; -1 stopping to error; 0 ran; 1 accepting commands; 2 running
+
+Dura next_blink;
+volatile bool led_is_on;
+
+
+
+
 
 int errormsgN = 12;
 byte errormsg[12];
@@ -210,59 +501,30 @@ void run_by(int r) {
 Dura blinking;              // Countdown timer for blinking
 volatile bool blink_is_on;  // State reflecting whether blink is on or off
 
+void init_pins() {
+  if (waveN > 0) analogWriteResolution(12);
+  pinMode(LED_PIN, OUTPUT);
+  blink_is_on = false;
+  for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
+}
 
-/***************************************************
-** Initialization code -- run once only at start! **
-***************************************************/
+/*********************************************
+ * Initialization -- run once only at start! *
+ *********************************************/
 
 void read_my_eeprom() {
-  // Make sure the EEPROM corresponds to the expected device
-  whoami[0] = '~';
+  // Read identifying tag (22 chars max)
+  whoami[0] = '^';
   int i = 0;
-  for (; i < eepsigN; i++) {
+  bool zeroed = false;
+  for (; i < WHON-2; i++) {
     byte c = EEPROM.read(i);
-    if (c != eepsig[i]) {
-      char msg[] = "wrong-ver";
-      running = -2;
-      int j = 0;
-      for (; j < 9; j++) errormsg[j] = msg[j];
-      for (; j < errormsgN; j++) errormsg[j] = ' ';
-      return;
-    }
+    if (zeroed) whoami[i+1] = 0;
+    else if (c == 0) { whoami[i+1] = '$'; zeroed = true; }
     else whoami[i+1] = c;
+    i++;
   }
-  for (; i < eepsigN + 12; i++) {
-    byte c = EEPROM.read(i);
-    if (c == 0) break;
-    whoami[i+1] = c;
-  }
-  whoami[++i] = '$';
-  whoami[++i] = 0;
-  whoamiN = i;
-  i = eN;
-
-  // Read wave number if it's there
-  if (EEPROM.read(i++) != 0) {
-    waveN = EEPROM.read(i++);
-    if (waveN < 0) waveN = 0;
-    if (waveN > 1) waveN = 1;  // Default case falls into here anyway
-  }
-  else i += 1;
-
-  // Read number of digital channels if it's there
-  if (EEPROM.read(i++) != 0) {
-    digiN = EEPROM.read(i++);
-    if (digiN < 0) digiN = 0;
-    if (digiN > 25) digiN = 25;  // Default case falls into here anyway
-  }
-  else i += 1;
-
-  // Read array of pins (it should always be there)
-  for (int j = 0; j < digiN; j++) {
-    digi[j] = EEPROM.read(i++);
-    if (digi[j] < 0) digi[j] = 0;
-    if (digi[j] > 33) digi[j] = 33;
-  }
+  whoami[i+1] = (zeroed) ? 0 : '$';
 }
 
 void init_wave() {
@@ -271,115 +533,23 @@ void init_wave() {
   }
 }
 
-void init_pins() {
-  if (waveN > 0) analogWriteResolution(12);
-  pinMode(LED_PIN, OUTPUT);
-  blink_is_on = false;
-  for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
-}
-
 // Setup runs once at reset / power on
 void setup() {
-  running = 0;
+  runlevel = RUNSTOP;
   read_my_eeprom();
-  init_pins();
+  init_all_protocols(protocols);
+  init_all_channels(channels);
   Serial.begin(115200);
   ARM_DEMCR |= ARM_DEMCR_TRCENA;
   ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
-  for (int i = 0; i < PROT; i++) protocols[i].next = 255;
-  for (int j = 0; j < CHAN; j++) {
-    channels[j].protocol = 255;
-    if (j < DIG) channels[j].disabled = (j >= digiN) ? 1 : 0;
-    else channels[j].disabled = (waveN < 1) ? 1 : 0;
-  }
-  running = 0;
-  blinking.s = 0;
-  blinking.u = 1000;   // 1 ms delay before doing anything
-  pending_shift.s = 0;
-  pending_shift.u = 0;
-  tick = micros();
+  errn = 0;
   bufi = 0;
-}
-
-
-/********************************
-** Number manipulation and I/O **
-*********************************/
-
-#define CLIP(i, lo, hi) ((i < lo) ? lo : ((i > hi) ? hi : i))
-
-#define HEXTRI(i) (i + ((i < 10) ? '0' : '7'))
-
-#define DEHEXT(i) (i - ((i > '9') ? '7' : '0'))
-
-void six_write(int value, byte *target) {
-  for (int i = 5; i >= 0; i--, value /= 10) target[i] = '0'+(value%10);
-}
-
-int six_read(byte *target) {
-  int s = 0;
-  for (int i = 0; i < 6; i++) {
-    byte c = target[i];
-    if (c < '0' || c > '9') return -1;
-    s = 10*s + (c-'0');
-  }
-  return s;
-}
-
-
-/************************************
-** Manipulation and I/O of timings **
-************************************/
-
-void advance(Dura *x, int us) {
-  x->u += us;
-  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
-}
-
-void advance_from(Dura *x, Dura v) {
-  x->u += v.u;
-  x->s += v.s;
-  while (x->u >= 1000000) { x->u -= 1000000; x->s += 1; }
-}
-
-void diminish(Dura *x, int us) {
-  x->u -= us;
-  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
-}
-
-void diminish_by(Dura *x, Dura v) {
-  x->u -= v.u;
-  x->s -= v.s;
-  while (x->u < 0) { x->u += 1000000; x->s -= 1; }
-}
-
-void seven_write(Dura t, byte *target) {
-  if (t.s >= 1000) {
-    six_write(t.s, target);
-    target[6] = 's';
-  }
-  else if (t.s >= 1) {
-    six_write(t.s*1000 + t.u/1000, target);
-    target[6] = 'm';
-  }
-  else {
-    if (t.s < 0 || t.u < 0) six_write(0, target);
-    else six_write(t.u, target);
-    target[6] = 'u';
-  }
-}
-
-Dura seven_read(byte *target) {
-  Dura dura;
-  int i = six_read(target);
-  if (i < 0) { dura.s = dura.u = -1; }
-  else {
-    if      (target[6] == 's') { dura.s = i; dura.u = 0; }
-    else if (target[6] == 'u') { dura.s = 0; dura.u = i; }
-    else if (target[6] == 'm') { dura.s = i/1000; dura.u = 1000*(i%1000); }
-    else                       { dura.s = -1; dura.u = -1; }
-  }
-  return dura;
+  global_clock = (Dura){ 0, 0 };
+  next_event = (Dura){ 0, 0 };
+  next_blink = (Dura){ 0, MHZ*1000 }; // 1 ms delay before doing anything
+  led_is_on = false;
+  tick = ARM_DWT_CYCCNT;
+  runlevel = RUNPROG;
 }
 
 
@@ -873,24 +1043,6 @@ void loop() {
   }
 
   // Read anything waiting on the serial port
-  int av = Serial.available();
-  if (av > 0) {
-    byte c = Serial.read();
-    while (bufi == 0 && c != '~') {
-      av--;
-      if (av > 0) c = Serial.read();
-      else break;
-    }
-    if (av > 0) {
-      buf[bufi++] = c;
-      av--;
-      while (bufi < bufN && av > 0) {
-        c = Serial.read();
-        buf[bufi++] = c;
-        av--;
-      }
-    }
-  }
 
   // Interpret any fully buffered commands
   if (bufi > 1) {
