@@ -20,7 +20,7 @@ TODO: example picture goes here.
 
 Teensy Stimulus has a simple serial protocol for communications.
 
-A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There are no variable-length commands.
+A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There is only a single variable-length command, which starts with `^` and ends with `$`.
 
 Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `^` and end with `$`.
 
@@ -30,7 +30,7 @@ No command or return value may be longer than 60 bytes in addition to the starti
 
 ### Identifying a Teensy Stimulus device
 
-If you send the command `~:`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer), followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
+If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer), followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
 
 ### Output channels
 
@@ -99,7 +99,7 @@ An annotated example is given below.
 
 Analog stimuli must be set piece by piece.  Digital stimuli that are set all at once can be modified by further commands (to invert polarity, for instance).
 
-To immediately run the command on that single channel, discarding all other settings, use `*` in place of `=`.  (This only works when the system is not already running.)
+To immediately run the command on that single channel, discarding all other settings, use `:` in place of `=`.  (This only works when the system is not already running.)
 
 #### Chained Stimulus Trains
 
@@ -109,17 +109,17 @@ A maximum of 254 trains can be stored across all pins.  Each of the 25 initial p
 
 ### Error States
 
-The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~$` which will return `~!` if there is an error and `~.` if not; for `~?` which will report the error state (as `^error message here$` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
+The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `^error message here$` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
 
 ### Executing and Querying a Stimulation Protocol
 
-To run a stimulation protocol on all defined channels, send the command `~!`.  To run on only a single defined channel, send the command `~A!` where `A` is the channel letter.  This will also clear the programs on all other pins.
+To run a stimulation protocol on all defined channels, send the command `~*`.  To run on only a single defined channel, send the command `~A*` where `A` is the channel letter.  This will also clear the programs on all other pins.
 
 To terminate a stimulation protocol in progress, send the command `~/`.  To terminate a single channel while leaving any others still running, use `~A/`.  Once terminated, a channel cannot be restarted.
 
-To ask the board to tell what time point it is at, send the command `~?`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `^an error message here$`.
+To ask the board to tell what time point it is at, send the command `~#`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `^an error message here$`.
 
-To query the state machine that runs an individual channel, send the command `~A$` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.
+To query the state machine that runs an individual channel, send the command `~A@` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.  Analog stimuli will always report 1 or 3, not 2.
 
 The Teensy Stimulus board will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A#` (for channel `A`).  It will respond with 8 numbers (after a `~`):
 
@@ -168,6 +168,28 @@ TODO: write this.
 
 ## Complete Teensy Stimulator Command Reference
 
+### Handy Mnemonics
+
+Controlling: `*` means run; `/` means abort.  `.` means clear, `"` means redo.
+
+Feedback: `@` checks the run level; `#` gets details; `?` gets messages.
+
+Channels: `=` sets everything.  `:` sets and runs everything.  `&` starts a new thing.
+
+### Setting Identity (do this first, but only once!)
+
+You can give the board an identifying string of up to 52 characters in length.  This
+should not be done more than necessary, as eventually the board's EEPROM will wear out.
+
+The string is
+
+```
+^IDENTITYyour string here$`
+```
+
+Note that there is no space after `IDENTITY` and the string.  When returned, `IDENTITY` will be
+replaced by `stim1.0 ` (with a space); see the `~?` command.
+
 ### Channel-Independent Commands
 
 *The command string starts with `~` and is followed by a single command char.*
@@ -176,13 +198,17 @@ TODO: write this.
 
 | Command | Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Check errors | `$` | 2 chars | `~!` if error, otherwise `~.` |
-| Abort        | `/` | None | Stops any running protocol. |
-| Clear        | `.` | None | Clears errors & protocols. |
-| Refresh      | `"` | None | Restores protocols from prior run to use again. |
-| Run          | `!` | None | Starts all protocols running.  (Error if already running.) |
-| Report       | `?` | 15 chars | `~01234567.654321` or `^error message$`; time == 0 if not running. |
-| Identity     | `:` | 10-22 chars | `^stim1.0 ` + message + `$` |
+| Run       | `*` | None | Starts all protocols running.  (Error if already running.) |
+| Abort     | `/` | None | Stops any running protocol. |
+| Clear     | `.` | None | Clears errors & protocols. |
+| Refresh   | `"` | None | Restores protocols from prior run to use again. |
+| State?    | `@` | 2 chars | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
+| Report    | `#` | 16 chars | `~01234567.654321` or `^error message$`; time == 0 if not running. |
+| Identity  | `?` | 10-62 chars | `^stim1.0 ` + message + `$` |
+
+#### With Parameters
+
+*There are no channel-independent commands that take parameters at this time.*
 
 ### Channel-Dependent Commands
 
@@ -195,14 +221,14 @@ TODO: write this.
 | Command | Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
 | Abort run       | `/` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
-| Run alone       | `!` | None | Runs this output channel protocol alone.  (Must not be running.) |
-| Check state     | `$` | 5 chars | Run level digit, `;`, three digit train number. See text for details. |
-| Check quality   | `#` | 60 chars | 8 decimal numbers. See text for details |
+| Run alone       | `*` | None | Runs this output channel protocol alone.  (Must not be running.) |
+| Check state     | `@` | 5 chars | Run level digit, `;`, three digit train number. See text for details. |
+| Check quality   | `#` | 61 chars | 8 decimal numbers. See text for details |
 | Usual polarity  | `u` | None | Stimuli are low-to-high (digital) or waveform is normal (analog). |
 | Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
 | Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal. |
 | Triangular      | `r` | None | Analog stimulus should be triangular. |
-| Append train    | `+` | None | Adds and switches to a new stimulus train to follow the existing one. |
+| Append train    | `+` | None | Adds a new stimulus train to follow the existing one. |
 
 #### With Parameters
 
@@ -219,7 +245,7 @@ TODO: write this.
 | Set period            | `w` | 8 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
 | Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Values from 0 to 2047. |
 | Set full protocol     | `=` | 53 chars: 6x8 durations + 5 `;` | None | Digital channels only. |
-| Set and run protocol  | `*` | 53 chars: same as `=` | None | Clears all other protocols. |
+| Set and run protocol  | `:` | 53 chars: same as `=` | None | Clears all other protocols. |
 
 ## Examples
 

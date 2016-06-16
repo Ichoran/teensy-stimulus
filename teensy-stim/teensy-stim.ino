@@ -460,6 +460,80 @@ void write_who_am_i() {
 }
 
 
+
+/*********************************************
+ * Initialization -- run once only at start! *
+ *********************************************/
+
+void read_my_eeprom() {
+  // Read identifying tag (22 chars max)
+  whoami[0] = '^';
+  int i = 0;
+  bool zeroed = false;
+  for (; i < WHON-2; i++) {
+    byte c = EEPROM.read(i);
+    if (zeroed) whoami[i+1] = 0;
+    else if (c == 0) { whoami[i+1] = '$'; zeroed = true; }
+    else whoami[i+1] = c;
+    i++;
+  }
+  whoami[i+1] = (zeroed) ? 0 : '$';
+}
+
+void init_wave() {
+  for (int i = 0; i < 256; i++) {
+    wave[i] = 2047 + (short)round(2047*sin(i * 2 * M_PI));
+  }
+}
+
+// Setup runs once at reset / power on
+void setup() {
+  runlevel = RUNSTOP;
+  read_my_eeprom();
+  init_all_protocols(protocols);
+  init_all_channels(channels);
+  Serial.begin(115200);
+  ARM_DEMCR |= ARM_DEMCR_TRCENA;
+  ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
+  errn = 0;
+  bufi = 0;
+  global_clock = (Dura){ 0, 0 };
+  next_event = (Dura){ 0, 0 };
+  next_blink = (Dura){ 0, MHZ*1000 }; // 1 ms delay before doing anything
+  led_is_on = false;
+  tick = ARM_DWT_CYCCNT;
+  runlevel = RUNPROG;
+}
+
+
+/*******************
+ * Command Parsing *
+ *******************/
+
+void process_error_command() {
+  if (bufi < 2) return;
+  if (bufi[0] != '~') { bufi = advance_command(buf, 0, bufi); return; }
+  bufi[1] switch {
+    case '@': Serial.write("~!", 2); Serial.send_now(); break;
+    case '.': /* TODO */ break;
+    case '?': /* TODO */ break;
+    default:
+  }
+  bufi = shift_buffer(buf, bufi, 2);
+}
+
+void process_complete_command() {
+  if (bufi < 2) return;
+}
+
+void process_init_command() {
+  if (bufi < 2) return;
+}
+
+void process_runtime_command() {
+  if (bufi < 2) return;
+}
+
 /***********
  * Runtime *
  ***********/
@@ -523,49 +597,6 @@ void init_pins() {
   for (int i = 0; i < digiN; i++) pinMode(digi[i], OUTPUT);
 }
 
-/*********************************************
- * Initialization -- run once only at start! *
- *********************************************/
-
-void read_my_eeprom() {
-  // Read identifying tag (22 chars max)
-  whoami[0] = '^';
-  int i = 0;
-  bool zeroed = false;
-  for (; i < WHON-2; i++) {
-    byte c = EEPROM.read(i);
-    if (zeroed) whoami[i+1] = 0;
-    else if (c == 0) { whoami[i+1] = '$'; zeroed = true; }
-    else whoami[i+1] = c;
-    i++;
-  }
-  whoami[i+1] = (zeroed) ? 0 : '$';
-}
-
-void init_wave() {
-  for (int i = 0; i < 256; i++) {
-    wave[i] = 2047 + (short)round(2047*sin(i * 2 * M_PI));
-  }
-}
-
-// Setup runs once at reset / power on
-void setup() {
-  runlevel = RUNSTOP;
-  read_my_eeprom();
-  init_all_protocols(protocols);
-  init_all_channels(channels);
-  Serial.begin(115200);
-  ARM_DEMCR |= ARM_DEMCR_TRCENA;
-  ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
-  errn = 0;
-  bufi = 0;
-  global_clock = (Dura){ 0, 0 };
-  next_event = (Dura){ 0, 0 };
-  next_blink = (Dura){ 0, MHZ*1000 }; // 1 ms delay before doing anything
-  led_is_on = false;
-  tick = ARM_DWT_CYCCNT;
-  runlevel = RUNPROG;
-}
 
 
 /*************************************
