@@ -24,19 +24,21 @@ A fixed-length command starts with the symbol `~`.  The following byte or bytes 
 
 Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `^` and end with `$`.
 
-The symbols ~, ^, and $ will ONLY appear at the beginning (`~`, `^`) and/or end (`$`) of a command.  No escape sequences are permitted; if an invalid character needs to be returned it will be replaced with underscore `_`.
+The symbols ~, ^, and $ will ONLY appear at the beginning (`~`, `^`) and/or end (`$`) of a command.  No escape sequences are permitted; if one of the above characters needs to be returned it will be replaced with underscore `_`.
 
-No command or return value may be longer than 60 bytes in addition to the starting `^` and ending `$` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits within one 64-byte USB packet sent/received by the board.
+No command or return value may be longer than 60 bytes in addition to the starting `^` and ending `$` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits safely within one 64-byte USB packet sent/received by the board.
 
 ### Identifying a Teensy Stimulus device
 
-If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string (that has been set with the Teensy Stimulus EEPROM Programmer), followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
+If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
 
 ### Output channels
 
 Each digital output channel is identified by a capital letter that refers to its pin number.  Pins 14 through 23 are lettered `A` through `J`; pins 0 through 13 continue with `K` through `X`.  Note that `X` is the Teensy 3.1 LED pin.  Note also that case is important: lower case letters do **not** refer to output channels.
 
 The analog output channel is specified by `Z` and is on pin A14/DAC.
+
+Note that pins do not turn on precisely simultaneously even if scheduled at the same time.  Lower-lettered pins turn on before higher-lettered ones; the latency between each pin state change and the next is at most a few microseconds, but if timing of that precision is important, you should measure it and not take the simultaneity for granted.
 
 ### Durations and Other Numbers
 
@@ -73,7 +75,7 @@ An example for each parameter is given below:
 | sinusoidal     | `l` | none     | analog  | `~Zl`        | Analog output will be sinusoidal (overrides `r`) |
 | triangular     | `r` | none     | analog  | `~Zr`        | Analog output will be triangular (overrides `l`) |
 
-Note that in analog outputs, only an integer number of wave half-periods are executed within the on time of a stimulus.  If a half-wave would not complete by the time a stimulus was to turn off, that half-wave will be skipped.  This is done to avoid high-frequency artifacts as an output suddenly vanishes.  Note also that analog outputs have a maximum range of 0-3.3V, so "off" will be 1.65V.  If you connect a 10 uF capacitor in-line with the output pin, you should effectively remove the 1.65V offset.  Note also that the maximum current is very low; an amplifier is needed to run a stimulus device.
+Note that the analog output only allows an integer number of wave half-periods to be executed within the on time of a stimulus.  If a half-wave would not complete by the time a stimulus was to turn off, that half-wave will be skipped.  This is done to avoid high-frequency artifacts as an output suddenly vanishes.  Note also that analog outputs have a maximum range of 0-3.3V, so "off" will be 1.65V.  If you connect a 10 uF capacitor in-line with the output pin, you should effectively remove the 1.65V offset.  Note also that the maximum current is very low; an amplifier is needed to run a stimulus device.
 
 Note also that very short stimuli may fail to complete as expected.  The software is designed to have a timing accuracy of around 100 microseconds.  Setting a pulse on duration of 5 microseconds is possible, but unlikely to produce the desired output.
 
@@ -103,13 +105,13 @@ To immediately run the command on that single channel, discarding all other sett
 
 #### Chained Stimulus Trains
 
-Stimulus trains can be chained one after another.  To add a new train after the existing specified one, use `+`, e.g. `~A+`.  All commands regarding this output pin will apply only to the second train after this command executes.  The second train will be initialized with zero values, and will begin executing as soon as the time on the first train elapses.
+Stimulus trains can be chained one after another.  To add a new train after the existing specified one, use `&`, e.g. `~A&`.  All commands regarding this output pin will apply only to the new train after this command executes.  The new train will be initialized with zero values (so you had better set them), and will begin executing as soon as the time on the previous train elapses.
 
 A maximum of 254 trains can be stored across all pins.  Each of the 25 initial pins reserves one train to begin with, leaving 229 free for extensions.
 
 ### Error States
 
-The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: requesting a channel that is not there, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `^error message here$` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
+The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: placing an invalid request, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `^error message here$` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
 
 ### Executing and Querying a Stimulation Protocol
 
@@ -146,23 +148,19 @@ To clear all stimuli, use `~.`.  To refresh stimuli (to run the same protocol ag
 
 The Teensy board contains an on-board LED which will blink to report on its status.
 
-If the device is improperly initialized, the LED will blink slowly (1s on, 1s off).
-
-If the device is waiting to receive commands to set up stimuli and/or start running, the LED will flash briefly twice a second.  When a stimulus protocol has finished, these flashes will be especially brief (dim).
+If the device is waiting to receive commands to set up stimuli and/or start running, the LED will flash briefly twice a second.
 
 If the device has encountered an error while running, the LED will flash very quickly (five times a second).
 
 While a stimulus protocol is running, the LED will be off by default.  If there is a protocol running on that output and there is no error, the LED will do whatever the protocol tells it to do.
+
+When a stimulus protocol has finished, the LED will blink slowly (1s on, 1s off).
 
 ## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
 
 TODO: write this.
 
 ## Implementation Details
-
-TODO: write this.
-
-## Setting EEPROM Values for A Particular Device
 
 TODO: write this.
 
@@ -208,7 +206,7 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 
 #### With Parameters
 
-*There are no channel-independent commands that take parameters at this time.*
+*There are no channel-independent commands that take parameters at this time save the identity-setting command (see above).*
 
 ### Channel-Dependent Commands
 
@@ -220,15 +218,15 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 
 | Command | Char | Result? | Additional Description |
 |---------|--------------|---------|------------------------|
-| Abort run       | `/` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
 | Run alone       | `*` | None | Runs this output channel protocol alone.  (Must not be running.) |
+| Abort run       | `/` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
 | Check state     | `@` | 5 chars | Run level digit, `;`, three digit train number. See text for details. |
 | Check quality   | `#` | 61 chars | 8 decimal numbers. See text for details |
 | Usual polarity  | `u` | None | Stimuli are low-to-high (digital) or waveform is normal (analog). |
 | Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
 | Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal. |
 | Triangular      | `r` | None | Analog stimulus should be triangular. |
-| Append train    | `+` | None | Adds a new stimulus train to follow the existing one. |
+| Append train    | `&` | None | Adds a new stimulus train to follow the existing one. |
 
 #### With Parameters
 
@@ -238,14 +236,53 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 |---------|--------------|-----------|---------|------------------------|
 | Set total time        | `t` | 8 chars: duration | None | |
 | Set initial delay     | `d` | 8 chars: duration | None | |
-| Set stimulus on time  | `y` | 8 chars: duration | None | |
-| Set stimulus off time | `n` | 8 chars: duration | None | |
+| Set stimulus on time  | `s` | 8 chars: duration | None | |
+| Set stimulus off time | `z` | 8 chars: duration | None | |
 | Set pulse on time     | `p` | 8 chars: duration | None | Digital channels only. |
 | Set pulse off time    | `q` | 8 chars: duration | None | Digital channels only. |
 | Set period            | `w` | 8 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
 | Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Values from 0 to 2047. |
 | Set full protocol     | `=` | 53 chars: 6x8 durations + 5 `;` | None | Digital channels only. |
 | Set and run protocol  | `:` | 53 chars: same as `=` | None | Clears all other protocols. |
+
+### Allowed Commands by State
+
+Possible states:
+- `E`: error state
+- `C`: completed run state (not reset)
+- `P`: programmable state
+- `R`: running state
+
+| Command | States Allowed | Behavior when disallowed |
+|---------|----------------|-------------------|
+|`^IDENTITY...$` | `P` | error |
+| `~*`  | `P`    | error |
+| `~/`  | `R`    | ignored |
+| `~.`  | `ECPR` | N/A |
+| `~"`  | `C`    | error |
+| `~@`  | `ECPR` | N/A |
+| `~#`  | `ECPR` | N/A |
+| `~?`  | `ECPR` | N/A |
+| `~A*` | `P`    | error |
+| `~A/` | `R`    | ignored |
+| `~A@` | `CPR`  | N/A |
+| `~A#` | `CR`   | returns all zeros |
+| `~Au` | `P`    | error |
+| `~Ai` | `P`    | error |
+| `~Zl` | `P`    | error (including if not `Z`) |
+| `~Zr` | `P`    | error (including if not `Z`) |
+| `~A&` | `P`    | error |
+| `~At` | `P`    | error |
+| `~Ad` | `P`    | error |
+| `~As` | `P`    | error |
+| `~Az` | `P`    | error |
+| `~Ap` | `P`    | error (including if `Z`) |
+| `~Aq` | `P`    | error (including if `Z`) |
+| `~Zw` | `P`    | error (including if not `Z`) |
+| `~Za` | `P`    | error (including if not `Z`) |
+| `~A=` | `P`    | error |
+| `~A:` | `P`    | error (including if `Z`) |
+
 
 ## Examples
 
@@ -277,7 +314,7 @@ There are a few things to note about this protocol.  First, some dead time is in
 ~A=00000120;00000110;01.00000;19.00000;0.006000;1.994000
 ```
 
-would work just as well to give a single 6 ms pulse (because the pulse up time of 1s expires before pulse time of 6 ms + pulse down time of 1994 ms).
+would work just as well to give a single 6 ms pulse (because the pulse up time of 1000s expires before pulse time of 6 ms + pulse down time of 1994 ms).
 
 ## Revision Notes
 
