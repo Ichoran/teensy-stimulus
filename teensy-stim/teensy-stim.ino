@@ -151,7 +151,7 @@ struct Protocol {
   }
 
   bool parse_all(byte *input) {
-    for (int i = 1; i < 5; i++) if (input[i*8] != ';') return false;
+    for (int i = 1; i < 6; i++) if (input[i*8] != ';') return false;
     Dura x; x = {0, 0};
     // Manually unrolled loop
     x.parse(input, 0*9); if (!x.is_valid()) return false; t = x;
@@ -163,24 +163,26 @@ struct Protocol {
     return true;
   }
 
+  void solo(Protocol *ps, int &pi) {
+    int i = 0;
+    ps[i] = *this;
+    while (i+1 < PROT && ps[i].next < PROT) {
+      ps[i+1] = ps[ps[i].next];
+      ps[i].next = (byte)(i+1);
+      i++;
+    }
+    pi = i;
+  }
+
   static void init(Protocol *ps, int &pi) {
     for (int i = 0; i < DIG+ANA; i++) ps[i].init();
     for (int i = DIG; i < DIG+ANA; i++) ps[i].j = 'l';
-    pi = DIG+ANA;
-  }
-
-  byte append(int &pi) {
-    if (pi < PROT) {
-      next = (byte)pi;
-      pi++;
-      return next;
-    }
-    else return 255;
+    pi = 0;
   }
 };
 
 Protocol protocols[PROT];
-int proti = DIG+ANA;
+int proti = 0;
 Protocol not_a_protocol = (Protocol){{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, ' ', ' ', 255, 255};
 
 
@@ -220,6 +222,7 @@ struct ChannelError {
 
 #define ANALOG_ZERO 2047
 #define ANALOG_AMPL 2047
+#define ANALOG_DIVS 16384
 
 #define CHAN (DIG+ANA)
 
@@ -236,7 +239,7 @@ struct Channel {
   void init(int index) {
     *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 0, 255, 255, {0, 0, 0, 0, 0, 0, 0, 0} };
     pin = (index < DIG) ? digi[index] : 255;
-    zero = (index < CHAN) ? index : 255;
+    zero = 255;
   }
 
   void refresh(Protocol *ps) {
@@ -272,6 +275,7 @@ struct Channel {
       runlevel = C_WAIT;
       t = p->t; t += d;
       yn = p->d; yn += d;
+      return true;
     }
     else {
       who = 255;
@@ -359,14 +363,28 @@ tail_recurse:
 
   static void refresh(Channel *cs, Protocol *ps) { for (int i = 0; i < CHAN; i++) cs[i].refresh(ps); }
 
-  static Dura advance(Channel *cs, Dura d, Protocol *ps) {
+  static void solo(Channel *cs, int it, Protocol *ps, int &pi) {
+    for (int i = 0; i < CHAN; i++) {
+      if (i == it) {
+        if (cs[i].who < PROT) ps[cs[i].who].solo(ps, pi);
+        cs[i].refresh(ps);
+      }
+      else cs[i].init(i);
+    }
+  }
+
+  static Dura advance(Channel *cs, Dura d, Protocol *ps, int &living) {
     Dura x = (Dura){0, 0};
+    int a = 0;
     for (int i = 0; i < DIG; i++) if (cs[i].alive()) {
+      a += 1;
       Dura y = cs[i].advance(d, ps);
       if (!y.is_empty()) {
         if (x.is_empty() || y < x) x = y;
       }
+      else if (!cs[i].alive()) a -= 1;
     }
+    living = a;
     return x;
   }
 };
@@ -541,7 +559,7 @@ void init_eeprom() {
 }
 
 void init_analog() {
-  for (int i = 0; i < 256; i++) wave[i] = (int16_t)(ANALOG_ZERO + (short)round(ANALOG_AMPL*sin(i * 2 * M_PI)));
+  for (int i = 0; i < 256; i++) wave[i] = (int16_t)round(ANALOG_DIVS*sin(i * 2 * (M_PI / 256)));
   analogWriteResolution(12);
   analogWrite(A14, ANALOG_ZERO);
 }
@@ -571,6 +589,7 @@ Dura io_anyway;          // Time at which you need to read I/O even if it may in
 #define RUNSET   1
 #define GOGOGO   2
 volatile int runlevel;   // -2 error; -1 stopping to error; 0 ran; 1 accepting commands; 2 running
+volatile int alive;      // Number of channels alive and running
 
 volatile bool led_is_on;
 
@@ -605,6 +624,7 @@ void analog_cooldown() {
 void go_go_go() {
   if (runlevel == RUNSET) {
     runlevel = LOCKED;
+    alive = 0;
     if (led_is_on) {
       led_is_on = false;
       digitalWrite(LED_PIN, LOW);
@@ -614,6 +634,7 @@ void go_go_go() {
       Channel *c = channels + i;
       c->who = c->zero;
       if (c->who == 255) continue;
+      alive += 1;
       Protocol *p = protocols + c->who;
       c->pin_off(p);
       c->t = p->t;
@@ -632,6 +653,14 @@ void go_go_go() {
   else if (runlevel != ERRDONE && runlevel != ERRSTOP) {
     error_with_message("Attempt to start running from invalid state.", "");
   }
+}
+
+bool run_iteration() {
+  // Can't pass volatile as reference, so buffer it
+  int living = alive;
+  next_event = Channel::advance(channels, global_clock, protocols, living);
+  alive = living;
+  return alive != 0;
 }
 
 
@@ -667,31 +696,96 @@ Protocol* process_get_protocol(byte ch) {
   }
 }
 
+Protocol* process_ensure_protocol(byte ch) {
+  Channel *c = process_get_channel(ch);
+  if (c->who != 255) return protocols + c->who;
+  else if (c->zero != 255) {
+    c->refresh(protocols);
+    return protocols + c->who;
+  }
+  else if (proti < PROT) {
+    c->zero = proti;
+    c->who = c->zero;
+    protocols[proti].init();
+    proti++;
+    return protocols + c->who;
+  }
+  else return process_get_protocol(ch);   // Defer to get for error handling
+}
+
+Protocol* process_new_protocol(byte ch) {
+  Channel *c = process_get_channel(ch);
+  if (proti < PROT) {
+    byte old = c->who;
+    while (c->who != 255) { old = c->who; c->who = protocols[c->who].next; }
+    protocols[old].next = (byte)proti;
+    c->who = (byte)proti;
+    protocols[proti].init();
+    proti++;
+    return protocols + c->who;
+  }
+  else {
+    c->who = 255;
+    return process_get_protocol(ch);    // Defer to get for error handling
+  }
+}
+
 void process_reset() {
   Protocol::init(protocols, proti);
   Channel::init(channels);
   erri = 0;
+  alive = 0;
   runlevel = RUNSET;
 }
 
 void process_refresh() {
-  Channel::refresh(channels, protocols);
+  if (runlevel == RUNSTOP) {
+    Channel::refresh(channels, protocols);
+    runlevel = RUNSET;  
+  }
 }
 
 void process_start_running() {
-  // TODO - write me
+  go_go_go();
 }
 
 void process_start_running(byte who) {
-  // TODO - write me
+  if (who >= 'A' && who <= 'Z' && who != 'Y') {
+    int i = who - 'A';
+    if (who == 'Z') i -= 1;
+    Channel::solo(channels, i, protocols, proti);
+    process_start_running();
+  }
+  else {
+    char tiny[3]; tiny[0] = who; tiny[1] = '\n'; tiny[2] = 0;
+    error_with_message("Trying to run on unknown channel", tiny);
+  }
 }
 
 void process_stop_running(byte who) {
-  // TODO - write me
+  Channel *c = process_get_channel(who);
+  if (runlevel == GOGOGO) {
+    if (c->who != 255) {
+      c->pin_low();
+      c->runlevel = C_ZZZ;
+      c->who = 255;
+      if (alive > 0) alive -= 1;
+      if (alive == 0) runlevel = RUNSTOP;
+    }
+  }
 }
 
 void process_stop_running() {
-  // TODO - write me
+  for (int i = 0; i < DIG; i++) {
+    Channel *c = channels + i;
+    if (c->who != 255) {
+      c->pin_low();
+      c->runlevel = C_ZZZ;
+      c->who = 255;
+    }
+  }
+  alive = 0;
+  runlevel = RUNSTOP;
 }
 
 void process_say_the_time() {
@@ -773,7 +867,7 @@ void process_init_command() {
       case '@': Serial.write("~."); Serial.send_now(); break;
       case '*': process_start_running(ch); break;
       case '/': break;
-      case '&': /* TODO */ break;
+      case '&': process_new_protocol(ch); break;
       case '=':
       case ':':
         if (bufi < 56) return;
@@ -781,18 +875,18 @@ void process_init_command() {
           error_with_message("Cannot set all on channel Z: ", (char*)buf, 12);
         }
         else {
-          if (!process_get_protocol(ch)->parse_all(buf+3)) {
-            error_with_message("Bad =: ", (char*)buf, 53);
+          if (!process_ensure_protocol(ch)->parse_all(buf+3)) {
+            error_with_message("Bad =: ", (char*)buf, 56);
           }         
         }
         discard_buf(56);
         if (b == ':') process_start_running(ch);
         return;
         break;
-      case 'u': process_get_protocol(ch)->i = 'u'; break;
-      case 'i': process_get_protocol(ch)->i = 'i'; break;
-      case 'l': if (ch != 'Z') error_with_message("Analog required: ", (char*)buf, 3); else process_get_protocol(ch)->j = 'l'; break;
-      case 'r': if (ch != 'Z') error_with_message("Analog required: ", (char*)buf, 3); else process_get_protocol(ch)->j = 'r'; break;
+      case 'u': process_ensure_protocol(ch)->i = 'u'; break;
+      case 'i': process_ensure_protocol(ch)->i = 'i'; break;
+      case 'l': if (ch != 'Z') error_with_message("Analog required: ", (char*)buf, 3); else process_ensure_protocol(ch)->j = 'l'; break;
+      case 'r': if (ch != 'Z') error_with_message("Analog required: ", (char*)buf, 3); else process_ensure_protocol(ch)->j = 'r'; break;
       case 't':
       case 'd':
       case 's':
@@ -805,7 +899,7 @@ void process_init_command() {
           error_with_message("Bad command for channel: ", (char*)buf, 11);
         }
         else {
-          if (!process_get_protocol(ch)->parse_labeled(b, buf+3)) {
+          if (!process_ensure_protocol(ch)->parse_labeled(b, buf+3)) {
             error_with_message("Bad duration format: ", (char*)buf, 11);
           }
         }
@@ -883,6 +977,7 @@ void process_runtime_command() {
 // Setup runs once at reset / power on
 void setup() {
   runlevel = RUNSTOP;
+  alive = 0;
   init_eeprom();
   init_digital();
   init_analog();
@@ -912,8 +1007,9 @@ void loop() {
   bool urgent = false;
   if (next_event < global_clock) {
     urgent = true;
-    if (runlevel == GOGOGO) { 
-      /* TODO */
+    if (runlevel == GOGOGO) {
+      bool complete = run_iteration();
+      if (complete) process_stop_running();
     }
     else {
       if (led_is_on) digitalWrite(LED_PIN, LOW);
