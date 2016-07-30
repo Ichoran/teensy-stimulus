@@ -8,12 +8,10 @@
 #define MHZ 72
 #define HTZ 72000000
 
-int lo = LOW;
-int hi = HIGH;
+#define LED_PIN 13
 
 #define DIG 24
 int digi[DIG] = { 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
-int led_is = 23;
 
 #define ANA 1
 int16_t wave[256];
@@ -128,7 +126,7 @@ struct Protocol {
   Dura s;    // Stimulus on time
   Dura z;    // Stimulus off time
   Dura p;    // Pulse time (or period, for analog)
-  Dura q;    // Pulse off time (analog: amplitude 0-2047 stored as microseconds)
+  Dura q;    // Pulse off time (analog: amplitude 0-2047)
   byte i;    // Invert? 'i' == yes, otherwise no
   byte j;    // Shape: 'l' = sinusoidal, 'r' = triangular, other = digital
   byte next; // Number of next protocol, 255 = none
@@ -228,16 +226,12 @@ struct Channel {
   Dura pq;        // Time until next pulse status switch
   byte runlevel;  // Runlevel 0 = off, 1 = stim off, 2 = stim on pulse off, 3 = pulse on
   byte pin;       // The digital pin number for this output, or 255 = analog out
-  byte disabled;  // Channel will not run unless this has value 0
   byte who;       // Which protocol we're running now, 255 = none
   byte zero;      // Initial protocol to start at (used only for resetting), 255 = none
-  byte unused0;
-  byte unused1;
-  byte unused2;
   ChannelError e; // Error statistics
 
   void init(int index) {
-    *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, 0, 0, 1, 255, 255, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0} };
+    *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 0, 255, 255, {0, 0, 0, 0, 0, 0, 0, 0} };
     pin = (index < DIG) ? digi[index] : 255;
     zero = (index < CHAN) ? index : 255;
   }
@@ -246,7 +240,6 @@ struct Channel {
     e = (ChannelError){0, 0, 0, 0, 0, 0, 0, 0};
     t = yn = pq = (Dura){0, 0};
     runlevel = C_ZZZ;
-    disabled = 0;
     who = zero;
     while (who < PROT && ps[who].next < PROT) who = ps[who].next;
   }
@@ -269,27 +262,29 @@ struct Channel {
 
   bool run_next_protocol(Protocol *ps, Dura d) {
     Protocol *p = ps + who;
-    pin_low();
+    pin_off(p);
     if (p->next < 255) {
       p = ps + p->next;
-      pin_off(ps);
+      pin_off(p);
       runlevel = C_WAIT;
       t = p->t; t += d;
       yn = p->d; yn += d;
     }
     else {
       who = 255;
+      digitalWrite(pin, LOW);
       runlevel = C_ZZZ;
-      disabled = 1;
       return false;
     }
   }
+
+  bool alive() { return runlevel != C_ZZZ && who != 255; }
 
   Dura advance(Dura d, Protocol *ps) {
     bool started_yn = false;
     bool started_pq = false;
 tail_recurse:
-    if (disabled || runlevel == C_ZZZ) return (Dura){0,0};
+    if (!alive()) return (Dura){0,0};
     if (runlevel == C_WAIT) {
       // Only relevant times are c->t and c->yn
       Dura *x = (yn < t) ? &yn : &t;
@@ -363,7 +358,7 @@ tail_recurse:
 
   static Dura advance(Channel *cs, Dura d, Protocol *ps) {
     Dura x = (Dura){0, 0};
-    for (int i = 0; i < DIG; i++) if (!cs[i].disabled) {
+    for (int i = 0; i < DIG; i++) if (cs[i].alive()) {
       Dura y = cs[i].advance(d, ps);
       if (!y.is_empty()) {
         if (x.is_empty() || y < x) x = y;
@@ -374,7 +369,7 @@ tail_recurse:
 };
 
 Channel channels[CHAN];
-Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, 0, 128, 1, 255, 255, 0, 0, 0, {0, 0, 0, 0, 0, 0, {0, 0}, {0, 0}}};
+Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 128, 255, 255, {0, 0, 0, 0, 0, 0, {0, 0}, {0, 0}}};
 
 
 
@@ -389,6 +384,49 @@ Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, 0, 128, 1, 255, 255, 
  * Error and I/O buffers *
  *************************/
 
+#define YELLN 39
+int yelln = 0;
+
+void yell(const char* msg) {
+  int k = strlen(msg);
+  Serial.write(msg, k);
+  yelln += k;
+  if (yelln > YELLN) {
+    yelln = 0;
+    Serial.write("\n", 1);
+  }
+  Serial.send_now();
+}
+
+void yell2ib(int i, int j, const byte* text) {
+  char buffer[23+128+1];
+  snprintf(buffer, 23, "%d %d ", i, j);
+  int k = 0, l = 0;
+  while (l < 23 && buffer[l]) l++;
+  for (; k < j && k < 128 && text[k]; k++) buffer[l+k] = text[k];
+  buffer[l+k] = '\n';
+  buffer[l+k+1] = 0;
+  Serial.write(buffer, l+k+1);
+  Serial.send_now();
+}
+
+void yellr3d(int rl, Dura g, Dura n, Dura io) {
+  char buffer[54];
+  buffer[0] = '^';
+  snprintf(buffer+1, 5, "%d  ", rl);
+  g.write_15((byte*)buffer+4);
+  buffer[19] = ' ';
+  n.write_15((byte*)buffer+20);
+  buffer[35] = ' ';
+  n.write_15((byte*)buffer+36);
+  buffer[51] = '$';
+  buffer[52] = '\n';
+  buffer[53] = 0;
+  Serial.write(buffer,53);
+  Serial.send_now();
+}
+
+
 #define MSGN 62
 #define WHON 62
 #define BUFN 128
@@ -400,26 +438,35 @@ byte whoami[WHON];
 byte buf[BUFN];
 int bufi = 0;
 
-int shift_buffer(byte* buffer, int iN, int shift) {
-  if (shift > iN) return 0;
-  if (shift < 1) return iN;
-  for (int j = shift; j < iN; j++) buffer[j-shift] = buffer[shift];
-  return iN - shift;
+void discard(byte* buffer, int& iN, int shift) {
+  if (shift > iN) iN = 0;
+  else if (shift >= 1) {
+    for (int j = shift; j < iN; j++) buffer[j-shift] = buffer[j];
+    int result = iN - shift;
+    yell2ib(iN, result, buffer);
+    iN = result;    
+  }
 }
 
-int advance_command(byte* buffer, int i0, int iN) {
-  int i = i0;
-  while (i < iN) {
-    byte b = buffer[i];
+void discard_buf(int shift) { discard(buf, bufi, shift); }
+
+void discard_command() {
+  int i = 1;
+  while (i < bufi) {
+    byte b = buf[i];
     if (b == '~' || b == '^') break;
     i++;
   }
-  return shift_buffer(buffer, iN, i);
+  discard(buf, bufi, i);
 }
 
 void drain_to_buf() {
   int av = Serial.available();
-  while ((av--) > 0 && bufi < BUFN) buf[bufi++] = Serial.read();
+  if (av > 0) {
+    int old = bufi;
+    while ((av--) > 0 && bufi < BUFN) buf[bufi++] = Serial.read();
+    yell2ib(old, bufi, buf);
+  }
 }
 
 void write_from_msg() {
@@ -436,18 +483,6 @@ void write_who_am_i() {
   int n = 0;
   for (; n < WHON && whoami[n] != 0; n++) msg[n] = whoami[n];
   Serial.write(msg, n);
-  Serial.send_now();
-}
-
-int yelln = 0;
-
-void yell(const char* msg) {
-  Serial.write(msg, strlen(msg));
-  yelln += 1;
-  if (yelln > 78) {
-    yelln = 0;
-    Serial.write("\n", 1);
-  }
   Serial.send_now();
 }
 
@@ -510,7 +545,7 @@ Dura global_clock;       // Time since start of running.
 Dura next_event;         // Time of next event.  Just busywait until then.
 
 #define MIN_BUSY_US 1000
-#define MAX_BUSY_US 10000
+#define MAX_BUSY_US 20000
 Dura io_anyway;          // Time at which you need to read I/O even if it may interfere with events
 
 #define LOCKED  -3
@@ -542,22 +577,21 @@ void go_go_go() {
     runlevel = LOCKED;
     if (led_is_on) {
       led_is_on = false;
-      channels[led_is].pin_low();
+      digitalWrite(LED_PIN, LOW);
     }
     int found = 0;
     for (int i = 0; i < DIG; i++) {
       Channel *c = channels + i;
-      if (!c->disabled) {
-        c->who = c->zero;
-        Protocol *p = protocols + c->who;
-        c->pin_off(p);
-        c->t = p->t;
-        c->yn = p->d;
-        c->runlevel = C_WAIT;
-        if (found) next_event = next_event.or_smaller(p->d);
-        else next_event = p->d;
-        found += 1;
-      }
+      c->who = c->zero;
+      if (c->who == 255) continue;
+      Protocol *p = protocols + c->who;
+      c->pin_off(p);
+      c->t = p->t;
+      c->yn = p->d;
+      c->runlevel = C_WAIT;
+      if (found) next_event = next_event.or_smaller(p->d);
+      else next_event = p->d;
+      found += 1;
     }
     global_clock = (Dura){0, 0};
     io_anyway = global_clock;
@@ -629,8 +663,8 @@ void process_say_the_time() {
 
 void process_error_command() {
   if (bufi < 2) return;
-  if (buf[0] != '~') { 
-    bufi = advance_command(buf, (buf[0] == '^') ? 1 : 0, bufi);
+  if (buf[0] != '~') {
+    discard_command();
     return;
   }
   // Was a fixed-length command.  Pick out the meaningful ones.
@@ -641,14 +675,14 @@ void process_error_command() {
     case '?': write_who_am_i(); break;
     default: break;
   }
-  bufi = shift_buffer(buf, bufi, 2);
+  discard_buf(2);
 }
 
 void process_complete_command() {
   if (bufi < 2) return;
   if (buf[0] != '~') {
     error_with_message("unknown command starting: ", (char*)buf, 1);
-    bufi = advance_command(buf, (buf[0] == '^') ? 1 : 0, bufi);
+    discard_command();
     return;
   }
   switch(buf[1]) {
@@ -661,11 +695,11 @@ void process_complete_command() {
     default:
       if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
         if (bufi < 3) return;
-        if (buf[2] == '/') { shift_buffer(buf, bufi, 3); return; }
+        if (buf[2] == '/') { discard_buf(3); return; }
       }
       error_with_message("Command not valid (run complete): ", (char*)buf, 2);
   }
-  bufi = shift_buffer(buf, bufi, 2);
+  discard_buf(2);
 }
 
 void process_init_command() {
@@ -676,13 +710,15 @@ void process_init_command() {
     if (i < bufi) {
       if (memcmp("IDENTITY", buf+1, 8) != 0) {
         error_with_message("Expected ^IDENTITY found:", (char*)buf, bufi);
+        discard_command();
         return;
       }
       ensure_eeprom_is(buf + 9, 8, i-1, WHON - 2);
-      bufi = shift_buffer(buf, bufi, i+1);
+      discard_buf(i+1);
     }
     else if (bufi >= WHON) {
       error_with_message("^ without $ in: ", (char*)buf, bufi);
+      discard_command();
     }
     return;
   }
@@ -707,7 +743,7 @@ void process_init_command() {
             error_with_message("Bad =: ", (char*)buf, 53);
           }         
         }
-        bufi = shift_buffer(buf, bufi, 56);
+        discard_buf(56);
         if (b == ':') process_start_running(ch);
         return;
         break;
@@ -731,13 +767,13 @@ void process_init_command() {
             error_with_message("Bad duration format: ", (char*)buf, 11);
           }
         }
-        bufi = shift_buffer(buf, bufi, 11);
+        discard_buf(11);
         return;
       case 'a': /* TODO */ return;
       default:
         error_with_message("Channel command not valid (setting): ", (char*)buf, 3);
     }
-    bufi = shift_buffer(buf, bufi, 3);
+    discard_buf(3);
   }
   else {
     switch(b) {
@@ -750,7 +786,7 @@ void process_init_command() {
       default:
         error_with_message("Command not valid (setting): ", (char*)buf, 2);
     }
-    bufi = shift_buffer(buf, bufi, 2);
+    discard_buf(2);
   }
 }
 
@@ -758,7 +794,7 @@ void process_runtime_command() {
   if (bufi < 2) return;
   if (buf[0] != '~') {
     error_with_message("Channel command not valid(running): ", (char*)buf, 2);
-    bufi = advance_command(buf, (buf[0] == '^') ? 1 : 0, bufi);
+    discard_command();
     return;
   }
   byte b = buf[1];
@@ -780,7 +816,7 @@ void process_runtime_command() {
       default:
         error_with_message("Channel command not valid (running): ", (char*)buf, 3);
     }
-    bufi = shift_buffer(buf, bufi, 3);
+    discard_buf(3);
   }
   else {
     switch(b) {
@@ -792,7 +828,7 @@ void process_runtime_command() {
       default:
         error_with_message("Command not valid (running): ", (char*)buf, 2);
     }
-    bufi = shift_buffer(buf, bufi, 2);    
+    discard_buf(2);   
   }
 }
 
@@ -805,8 +841,10 @@ void process_runtime_command() {
 // Setup runs once at reset / power on
 void setup() {
   runlevel = RUNSTOP;
+  ensure_eeprom_is((byte*)"stim1.0 ", 0, 8, 0);
   read_my_eeprom();
   process_reset();
+  for (int i = 0; i<DIG; i++) { pinMode(i, OUTPUT); digitalWrite(i, LOW); }
   Serial.begin(115200);
   ARM_DEMCR |= ARM_DEMCR_TRCENA;
   ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
@@ -817,8 +855,9 @@ void setup() {
   led_is_on = false;
   tick = ARM_DWT_CYCCNT;
   runlevel = RUNSET;
-  yell("S");
 }
+
+int lastrun = -10;
 
 // Runs over and over forever (after setup() finishes)
 void loop() {
@@ -831,23 +870,25 @@ void loop() {
     urgent = true;
     if (runlevel == GOGOGO) { 
       /* TODO */
-      yell("go");
     }
     else {
-      if (led_is_on) channels[led_is].pin_low();
-      else channels[led_is].pin_high();
+      if (led_is_on) digitalWrite(LED_PIN, LOW);
+      else digitalWrite(LED_PIN, HIGH);
       led_is_on = !led_is_on;
       delta = 0;
       switch(runlevel) {
-        case RUNSET: delta = (led_is_on) ? MHZ*100000 : MHZ*400000;
-        case RUNSTOP: delta = MHZ*1000000;
-        case ERRSTOP: delta = MHZ*100000;
-        case ERRDONE: delta = MHZ*100000;
-        default: delta = MHZ*1000;
+        case RUNSET:  delta = (led_is_on) ?   5000 :  495000; break;
+        case RUNSTOP: delta = (led_is_on) ? 100000 : 1900000; break;
+        case ERRSTOP: delta = (led_is_on) ?  10000 :   90000; break;
+        case ERRDONE: delta = (led_is_on) ?  10000 :  190000; break;
+        default:      delta = (led_is_on) ?  10000 :   40000; break;
       }
-      next_event += delta;
-      yell("L");
+      next_event += MHZ * delta;
     }
+  }
+  if (runlevel == ERRSTOP) {
+    // Without analog I/O, can just stop immediately.
+    runlevel = ERRDONE;
   }
   if (!urgent || io_anyway < global_clock) {
     Dura soon = global_clock;
@@ -862,15 +903,15 @@ void loop() {
         case GOGOGO: process_runtime_command(); break;
         default: break;
       }
+      if (io_anyway < global_clock) yell("io");
       now = ARM_DWT_CYCCNT;
       delta = now - tick;
       tick = now;
       global_clock += delta;
       io_anyway = global_clock;
       io_anyway += MHZ * MAX_BUSY_US;
-      yell("p");
     }
-    else yell("_");
   }
-  delay(100);
+  if (lastrun != runlevel) yellr3d(runlevel, global_clock, next_event, io_anyway);
+  lastrun = runlevel;
 }
