@@ -148,13 +148,13 @@ To clear all stimuli, use `~.`.  To refresh stimuli (to run the same protocol ag
 
 The Teensy board contains an on-board LED which will blink to report on its status.
 
-If the device is waiting to receive commands to set up stimuli and/or start running, the LED will flash briefly twice a second.
+If the device is waiting to receive commands to set up stimuli and/or start running, the LED will flash briefly once a second.
 
-If the device has encountered an error while running, the LED will flash very quickly (five times a second).
+If the device has encountered an error while running, the LED will flash quickly (five times a second, and brighter than when waiting).
 
 While a stimulus protocol is running, the LED will be off by default.  If there is a protocol running on that output and there is no error, the LED will do whatever the protocol tells it to do.
 
-When a stimulus protocol has finished, the LED will blink slowly (1s on, 1s off).
+When a stimulus protocol has finished, the LED will flash briefly once every three seconds.
 
 ## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
 

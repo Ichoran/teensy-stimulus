@@ -218,6 +218,9 @@ struct ChannelError {
 #define C_LO 2
 #define C_HI 3
 
+#define ANALOG_ZERO 2047
+#define ANALOG_AMPL 2047
+
 #define CHAN (DIG+ANA)
 
 struct Channel {
@@ -384,6 +387,7 @@ Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 128, 255, 255,
  * Error and I/O buffers *
  *************************/
 
+#ifdef YELL_DEBUG
 #define YELLN 39
 int yelln = 0;
 
@@ -425,16 +429,14 @@ void yellr3d(int rl, Dura g, Dura n, Dura io) {
   Serial.write(buffer,53);
   Serial.send_now();
 }
-
+#endif
 
 #define MSGN 62
-#define WHON 62
 #define BUFN 128
 
 byte msg[MSGN];
-int errn = 0;
+int erri = 0;
 
-byte whoami[WHON];
 byte buf[BUFN];
 int bufi = 0;
 
@@ -443,7 +445,9 @@ void discard(byte* buffer, int& iN, int shift) {
   else if (shift >= 1) {
     for (int j = shift; j < iN; j++) buffer[j-shift] = buffer[j];
     int result = iN - shift;
+#ifdef YELL_DEBUG
     yell2ib(iN, result, buffer);
+#endif
     iN = result;    
   }
 }
@@ -463,26 +467,23 @@ void discard_command() {
 void drain_to_buf() {
   int av = Serial.available();
   if (av > 0) {
+#ifdef YELL_DEBUG
     int old = bufi;
+#endif
     while ((av--) > 0 && bufi < BUFN) buf[bufi++] = Serial.read();
+#ifdef YELL_DEBUG
     yell2ib(old, bufi, buf);
+#endif
   }
 }
 
-void write_from_msg() {
-  if (errn > 0) Serial.write(msg, errn);
+void tell_msg() {
+  if (erri > 0) Serial.write(msg, erri);
   else {
     int n = 0;
     while (n < MSGN && msg[n] != 0) n++;
     Serial.write(msg, n);
   }
-  Serial.send_now();
-}
-
-void write_who_am_i() {
-  int n = 0;
-  for (; n < WHON && whoami[n] != 0; n++) msg[n] = whoami[n];
-  Serial.write(msg, n);
   Serial.send_now();
 }
 
@@ -492,48 +493,63 @@ void write_who_am_i() {
  * Initialization -- run once only at start! *
  *********************************************/
 
-void ensure_eeprom_is(const byte* msg, int offset, int n, int zeroIfBefore) {
-  int i = offset;
-  for (; i < offset+n; i++) {
-    byte c = EEPROM.read(i);
-    byte m = msg[i-offset];
-    if (c != m) {
-      EEPROM.write(i, m);
-      if (!m) break;
+#define WHON 62
+byte whoami[WHON];
+int whoi = 0;
+
+bool eeprom_set(const byte* msg, int eepi, int max, bool zero) {
+  int i = 0;
+  bool changed = false;
+  for (; i < max; i++) {
+    byte mi = msg[i];
+    if (!mi) break;
+    byte ei = EEPROM.read(i+eepi);
+    if (mi != ei) {
+      changed = true;
+      EEPROM.write(i+eepi, mi);
     }
   }
-  if (i < zeroIfBefore) {
-    byte c = EEPROM.read(i);
-    if (c) EEPROM.write(i, 0);
+  if (zero) {
+    byte ei = EEPROM.read(i+eepi);
+    if (ei != 0) {
+      changed = true;
+      EEPROM.write(i+eepi, 0);
+    }
   }
+  return changed;
 }
 
-void read_my_eeprom() {
-  // Read identifying tag (up to max allowed size)
+void eeprom_read_who() {
   whoami[0] = '^';
-  int i = 0;
-  bool zeroed = false;
-  for (; i < WHON-2; i++) {
-    byte c = EEPROM.read(i);
-    if (zeroed) whoami[i+1] = 0;
-    else if (c == 0) { whoami[i+1] = '$'; zeroed = true; }
-    else whoami[i+1] = c;
-    i++;
+  int i = 1;
+  for (; i < WHON-1; i++) {
+    byte ei = EEPROM.read(i-1);
+    if (!ei) break;
+    whoami[i] = ei;
   }
-  whoami[i+1] = (zeroed) ? 0 : '$';
+  whoami[i] = '$';
+  whoi = i+1;
+  if (i+1 < WHON) whoami[i+1] = 0;
 }
 
-void write_my_eeprom(const byte *msg) {
-  ensure_eeprom_is((byte*)"stim1.0 ", 0, (msg) ? 8 : 9, WHON);
-  if (msg) ensure_eeprom_is(msg, 8, WHON-2-8, WHON);
-  read_my_eeprom();
+void tell_who() { Serial.write(whoami, whoi); Serial.send_now(); }
+
+void init_eeprom() {
+  bool first = eeprom_set((byte*)"stim1.0 ", 0, WHON, false);
+  if (first) eeprom_set((byte*)"", 8, WHON, true);
+  eeprom_read_who();
 }
 
-void init_wave() {
-  for (int i = 0; i < 256; i++) {
-    wave[i] = (int16_t)(2047 + (short)round(2047*sin(i * 2 * M_PI)));
-  }
+void init_analog() {
+  for (int i = 0; i < 256; i++) wave[i] = (int16_t)(ANALOG_ZERO + (short)round(ANALOG_AMPL*sin(i * 2 * M_PI)));
+  analogWriteResolution(12);
+  analogWrite(A14, ANALOG_ZERO);
 }
+
+void init_digital() {
+  for (int i = 0; i<DIG; i++) { pinMode(i, OUTPUT); digitalWrite(i, LOW); }
+}
+
 
 
 /***********
@@ -559,9 +575,9 @@ volatile int runlevel;   // -2 error; -1 stopping to error; 0 ran; 1 accepting c
 volatile bool led_is_on;
 
 void error_with_message(const char* what, int n, const char* detail, int m) {
-  if (errn == 0) {
-    for (int i = 0; i < n && errn < MSGN; i++) { char c = what[i]; msg[errn] = c; if (c == 0) break; errn += 1; }
-    for (int i = 0; i < m && errn < MSGN; i++) { char c = detail[i]; msg[errn] = c; if (c == 0) break; errn += 1; }
+  if (erri == 0) {
+    for (int i = 0; i < n && erri < MSGN; i++) { char c = what[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
+    for (int i = 0; i < m && erri < MSGN; i++) { char c = detail[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
   }
   if (runlevel != ERRDONE) runlevel = ERRSTOP;
 }
@@ -572,8 +588,22 @@ void error_with_message(const char* what, int n, const char* detail) { error_wit
 
 void error_with_message(const char* what, const char* detail) { error_with_message(what, MSGN, detail, MSGN); }
 
+void analog_cooldown() {
+  if (runlevel == ERRSTOP) {
+    if (channels[DIG].who == 255) {
+      if (channels[DIG].zero != 255) analogWrite(A14, ANALOG_ZERO);
+      runlevel = ERRDONE;
+    }
+    else {
+      // TODO--nice cooldown!
+      analogWrite(A14, ANALOG_ZERO);
+      runlevel = ERRDONE;
+    }
+  }
+}
+
 void go_go_go() {
-  if (runlevel >= RUNSTOP && runlevel <= RUNSET) {
+  if (runlevel == RUNSET) {
     runlevel = LOCKED;
     if (led_is_on) {
       led_is_on = false;
@@ -599,6 +629,9 @@ void go_go_go() {
     tick = ARM_DWT_CYCCNT;
     runlevel = GOGOGO;
   }
+  else if (runlevel != ERRDONE && runlevel != ERRSTOP) {
+    error_with_message("Attempt to start running from invalid state.", "");
+  }
 }
 
 
@@ -615,7 +648,7 @@ Channel* process_get_channel(byte ch) {
     char tiny[2];
     tiny[0] = ch;
     tiny[1] = 0;
-    error_with_message("Unknown channel ", -1, tiny, 1);
+    error_with_message("Unknown channel ", tiny, 1);
     return &not_a_channel; 
   }
 }
@@ -629,7 +662,7 @@ Protocol* process_get_protocol(byte ch) {
     char tiny[2];
     tiny[0] = ch;
     tiny[1] = 0;
-    error_with_message("No protocol for channel ", -1, tiny, 1);
+    error_with_message("No protocol for channel ", tiny, 1);
     return &not_a_protocol;
   }
 }
@@ -637,12 +670,16 @@ Protocol* process_get_protocol(byte ch) {
 void process_reset() {
   Protocol::init(protocols, proti);
   Channel::init(channels);
-  errn = 0;
+  erri = 0;
   runlevel = RUNSET;
 }
 
 void process_refresh() {
   Channel::refresh(channels, protocols);
+}
+
+void process_start_running() {
+  // TODO - write me
 }
 
 void process_start_running(byte who) {
@@ -653,12 +690,16 @@ void process_stop_running(byte who) {
   // TODO - write me
 }
 
+void process_stop_running() {
+  // TODO - write me
+}
+
 void process_say_the_time() {
   msg[0] = '^';
   ((runlevel == GOGOGO) ? global_clock : (Dura){0, 0}).write_15(msg+1);
   msg[16] = '$';
   msg[17] = 0;
-  write_from_msg();
+  tell_msg();
 }
 
 void process_error_command() {
@@ -671,8 +712,8 @@ void process_error_command() {
   switch(buf[1]) {
     case '@': Serial.write("~!", 2); Serial.send_now(); break;
     case '.': process_reset(); break;
-    case '#': write_from_msg(); break;
-    case '?': write_who_am_i(); break;
+    case '#': tell_msg(); break;
+    case '?': tell_who(); break;
     default: break;
   }
   discard_buf(2);
@@ -690,7 +731,7 @@ void process_complete_command() {
     case '.': process_reset(); break;
     case '"': process_refresh(); break;
     case '#': process_say_the_time(); break;
-    case '?': write_who_am_i(); break;
+    case '?': tell_who(); break;
     case '/': break;
     default:
       if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
@@ -713,7 +754,8 @@ void process_init_command() {
         discard_command();
         return;
       }
-      ensure_eeprom_is(buf + 9, 8, i-1, WHON - 2);
+      eeprom_set(buf + 9, 8, i - 9, true);
+      eeprom_read_who();
       discard_buf(i+1);
     }
     else if (bufi >= WHON) {
@@ -780,9 +822,9 @@ void process_init_command() {
       case '@': Serial.write("~."); Serial.send_now(); break;
       case '.': process_reset(); break;
       case '#': process_say_the_time(); break;
-      case '?': write_who_am_i(); break;
+      case '?': tell_who(); break;
       case '/': break;
-      case '*': process_start_running(0); break;
+      case '*': process_start_running(); break;
       default:
         error_with_message("Command not valid (setting): ", (char*)buf, 2);
     }
@@ -823,8 +865,8 @@ void process_runtime_command() {
       case '@': Serial.write("~*"); Serial.send_now(); break;
       case '.': process_reset(); break;
       case '#': process_say_the_time(); break;
-      case '?': write_who_am_i(); break;
-      case '/': process_stop_running(0); break;
+      case '?': tell_who(); break;
+      case '/': process_stop_running(); break;
       default:
         error_with_message("Command not valid (running): ", (char*)buf, 2);
     }
@@ -841,14 +883,14 @@ void process_runtime_command() {
 // Setup runs once at reset / power on
 void setup() {
   runlevel = RUNSTOP;
-  ensure_eeprom_is((byte*)"stim1.0 ", 0, 8, 0);
-  read_my_eeprom();
+  init_eeprom();
+  init_digital();
+  init_analog();
   process_reset();
-  for (int i = 0; i<DIG; i++) { pinMode(i, OUTPUT); digitalWrite(i, LOW); }
   Serial.begin(115200);
   ARM_DEMCR |= ARM_DEMCR_TRCENA;
   ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
-  errn = 0;
+  erri = 0;
   bufi = 0;
   global_clock = (Dura){ 0, 0 };
   next_event = (Dura){ 0, 0 };
@@ -857,7 +899,9 @@ void setup() {
   runlevel = RUNSET;
 }
 
+#ifdef YELL_DEBUG
 int lastrun = -10;
+#endif
 
 // Runs over and over forever (after setup() finishes)
 void loop() {
@@ -877,19 +921,16 @@ void loop() {
       led_is_on = !led_is_on;
       delta = 0;
       switch(runlevel) {
-        case RUNSET:  delta = (led_is_on) ?   5000 :  495000; break;
-        case RUNSTOP: delta = (led_is_on) ? 100000 : 1900000; break;
-        case ERRSTOP: delta = (led_is_on) ?  10000 :   90000; break;
-        case ERRDONE: delta = (led_is_on) ?  10000 :  190000; break;
-        default:      delta = (led_is_on) ?  10000 :   40000; break;
+        case RUNSET:  delta = (led_is_on) ?  2000 :  998000; break;
+        case RUNSTOP: delta = (led_is_on) ?  2000 : 2998000; break;
+        case ERRSTOP: delta = (led_is_on) ? 10000 :   90000; break;
+        case ERRDONE: delta = (led_is_on) ? 10000 :  190000; break;
+        default:      delta = (led_is_on) ? 10000 :   40000; break;
       }
       next_event += MHZ * delta;
     }
   }
-  if (runlevel == ERRSTOP) {
-    // Without analog I/O, can just stop immediately.
-    runlevel = ERRDONE;
-  }
+  if (runlevel == ERRSTOP) analog_cooldown();
   if (!urgent || io_anyway < global_clock) {
     Dura soon = global_clock;
     soon += MHZ * MIN_BUSY_US;
@@ -903,7 +944,9 @@ void loop() {
         case GOGOGO: process_runtime_command(); break;
         default: break;
       }
+#ifdef YELL_DEBUG
       if (io_anyway < global_clock) yell("io");
+#endif
       now = ARM_DWT_CYCCNT;
       delta = now - tick;
       tick = now;
@@ -912,6 +955,8 @@ void loop() {
       io_anyway += MHZ * MAX_BUSY_US;
     }
   }
+#ifdef YELL_DEBUG
   if (lastrun != runlevel) yellr3d(runlevel, global_clock, next_event, io_anyway);
   lastrun = runlevel;
+#endif
 }
