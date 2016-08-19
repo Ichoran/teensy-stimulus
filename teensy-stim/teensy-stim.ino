@@ -58,7 +58,7 @@ int digi[DIG] = { 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7
 
 // The analog channels supported; support is a fiction currently.
 #define ANA 1
-#define ANALOG_DIVS 4096d
+#define ANALOG_DIVS 4096
 int16_t wave[ANALOG_DIVS];
 
 
@@ -167,6 +167,35 @@ struct Dura {
 };
 
 
+/*****************************
+ * Debugging via serial port *
+ *****************************/
+
+#ifdef EXTRA_SERIAL_DEBUGGING
+#define DBUFN 128
+char dbg[DBUFN];
+
+struct Debug {
+  int dummy_field;
+  void init() { dummy_field = 0; }
+  static void shout(int line, int i, int j) { 
+    dbg[DBUFN-1] = 0;
+    snprintf(dbg, DBUFN-1, "%d: %d %d\n", line, i, j);
+    Serial.write(dbg, strlen(dbg));
+    Serial.send_now();
+  }
+  static void shout(int line, int i, int j, Dura d) { 
+    dbg[DBUFN-1] = 0;
+    snprintf(dbg, DBUFN-1, "%d: %d %d ", line, i, j);
+    int n = strlen(dbg);
+    d.write_15((byte*)dbg + n);
+    dbg[n+15] = '\n';
+    dbg[n+16] = 0;
+    Serial.write(dbg, strlen(dbg));
+    Serial.send_now();
+  }
+};
+#endif
 
 /************************
  * Protocol information *
@@ -209,17 +238,17 @@ struct Protocol {
   }
 
   // Parse all durations (digital only)
-  bool parse_all(byte *input) {
-    for (int i = 1; i < 6; i++) if (input[i*8] != ';') return false;
+  int parse_all(byte *input) {
+    for (int i = 1; i < 6; i++) if (input[i*9 - 1] != ';') return 10+i;
     Dura x; x = {0, 0};
     // Manually unrolled loop
-    x.parse(input, 0*9); if (!x.is_valid()) return false; t = x;
-    x.parse(input, 1*9); if (!x.is_valid()) return false; d = x;
-    x.parse(input, 2*9); if (!x.is_valid()) return false; s = x;
-    x.parse(input, 3*9); if (!x.is_valid()) return false; z = x;
-    x.parse(input, 4*9); if (!x.is_valid()) return false; p = x;
-    x.parse(input, 5*9); if (!x.is_valid()) return false; q = x;
-    return true;
+    x.parse(input + 0*9, 8); if (!x.is_valid()) return 1; t = x;
+    x.parse(input + 1*9, 8); if (!x.is_valid()) return 2; d = x;
+    x.parse(input + 2*9, 8); if (!x.is_valid()) return 3; s = x;
+    x.parse(input + 3*9, 8); if (!x.is_valid()) return 4; z = x;
+    x.parse(input + 4*9, 8); if (!x.is_valid()) return 5; p = x;
+    x.parse(input + 5*9, 8); if (!x.is_valid()) return 6; q = x;
+    return 0;
   }
 
   // Reshuffles all protocols so only this one is ready to run.
@@ -310,7 +339,7 @@ struct Channel {
   void refresh(Protocol *ps) {
     e = (ChannelError){0, 0, 0, 0, 0, 0, 0, 0};
     t = yn = pq = (Dura){0, 0};
-    runlevel = C_ZZZ;
+    runlevel = C_ZZZ; // Debug::shout(__LINE__, pin, runlevel);
     who = zero;
     while (who < PROT && ps[who].next < PROT) who = ps[who].next;
   }
@@ -337,7 +366,7 @@ struct Channel {
     if (p->next < 255) {
       p = ps + p->next;
       pin_off(p);
-      runlevel = C_WAIT;
+      runlevel = C_WAIT; // Debug::shout(__LINE__, pin, runlevel, d);
       t = p->t; t += d;
       yn = p->d; yn += d;
       return true;
@@ -366,7 +395,7 @@ tail_recurse:
           pin_on(ps);
           started_yn = true;
           started_pq = true;
-          runlevel = C_HI;
+          runlevel = C_HI; // Debug::shout(__LINE__, pin, runlevel, d);
           pq = yn; pq += ps[who].p;
           yn += ps[who].s;
           e.nstim++;
@@ -393,7 +422,7 @@ tail_recurse:
           if (runlevel == C_LO) {
             pin_on(ps);
             started_pq = true;
-            runlevel = C_HI;
+            runlevel = C_HI; // Debug::shout(__LINE__, pin, runlevel, d);
             pq += ps[who].p;
             e.npuls++;
             // TODO--timing errors here!
@@ -407,7 +436,7 @@ tail_recurse:
         }
         else if (yn_first) {
           if (runlevel == C_HI) pin_off(ps);
-          runlevel = C_WAIT;
+          runlevel = C_WAIT; // Debug::shout(__LINE__, pin, runlevel, d);
           yn += ps[who].z;
           if (started_pq) { started_pq = false; e.pmiss++; }
           if (started_yn) { started_yn = false; e.smiss++; }
@@ -499,17 +528,16 @@ void yell2ib(int i, int j, const byte* text) {
 
 void yellr3d(int rl, Dura g, Dura n, Dura io) {
   char buffer[54];
-  buffer[0] = '^';
+  buffer[0] = '$';
   snprintf(buffer+1, 5, "%d  ", rl);
   g.write_15((byte*)buffer+4);
   buffer[19] = ' ';
   n.write_15((byte*)buffer+20);
   buffer[35] = ' ';
   n.write_15((byte*)buffer+36);
-  buffer[51] = '$';
-  buffer[52] = '\n';
-  buffer[53] = 0;
-  Serial.write(buffer,53);
+  buffer[51] = '\n';
+  buffer[52] = 0;
+  Serial.write(buffer,52);
   Serial.send_now();
 }
 #endif
@@ -541,7 +569,7 @@ void discard_command() {
   int i = 1;
   while (i < bufi) {
     byte b = buf[i];
-    if (b == '~' || b == '^') break;
+    if (b == '~' || b == '$') break;
     i++;
   }
   discard(buf, bufi, i);
@@ -603,14 +631,14 @@ bool eeprom_set(const byte* msg, int eepi, int max, bool zero) {
 }
 
 void eeprom_read_who() {
-  whoami[0] = '^';
+  whoami[0] = '$';
   int i = 1;
   for (; i < WHON-1; i++) {
     byte ei = EEPROM.read(i-1);
     if (!ei) break;
     whoami[i] = ei;
   }
-  whoami[i] = '$';
+  whoami[i] = '\n';
   whoi = i+1;
   if (i+1 < WHON) whoami[i+1] = 0;
 }
@@ -660,8 +688,13 @@ volatile bool led_is_on;
 
 void error_with_message(const char* what, int n, const char* detail, int m) {
   if (erri == 0) {
-    for (int i = 0; i < n && erri < MSGN; i++) { char c = what[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
-    for (int i = 0; i < m && erri < MSGN; i++) { char c = detail[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
+    msg[0] = '$';
+    erri = 1;
+    for (int i = 0; i < n && erri < MSGN-1; i++) { char c = what[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
+    for (int i = 0; i < m && erri < MSGN-1; i++) { char c = detail[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
+    msg[erri] = '\n';
+    erri += 1;
+    if (erri < MSGN) msg[erri] = 0;
   }
   if (runlevel != RUN_ERROR) runlevel = RUN_TO_ERROR;
 }
@@ -673,7 +706,7 @@ void error_with_message(const char* what, int n, const char* detail) { error_wit
 void error_with_message(const char* what, const char* detail) { error_with_message(what, MSGN, detail, MSGN); }
 
 void error_with_message(const char* what, char letter) {
-  tiny[2];
+  char tiny[2];
   tiny[0] = letter;
   tiny[1] = 0;
   error_with_message(what, tiny, 1);
@@ -713,7 +746,7 @@ void go_go_go() {
       c->pin_off(p);
       c->t = p->t;
       c->yn = p->d;
-      c->runlevel = C_WAIT;
+      c->runlevel = C_WAIT; // Debug::shout(__LINE__, c->pin, c->runlevel);
       if (found) next_event = next_event.or_smaller(p->d);
       else next_event = p->d;
       found += 1;
@@ -831,7 +864,7 @@ void process_stop_running(byte who) {
   if (runlevel == RUN_GO) {
     if (c->who != 255) {
       c->pin_low();
-      c->runlevel = C_ZZZ;
+      c->runlevel = C_ZZZ; // Debug::shout(__LINE__, c->pin, c->runlevel);
       c->who = 255;
       if (alive > 0) alive -= 1;
       if (alive == 0) runlevel = RUN_COMPLETED;
@@ -844,7 +877,7 @@ void process_stop_running() {
     Channel *c = channels + i;
     if (c->who != 255) {
       c->pin_low();
-      c->runlevel = C_ZZZ;
+      c->runlevel = C_ZZZ; // Debug::shout(__LINE__, c->pin, c->runlevel);
       c->who = 255;
     }
   }
@@ -853,9 +886,9 @@ void process_stop_running() {
 }
 
 void process_say_the_time() {
-  msg[0] = '^';
+  msg[0] = '$';
   ((runlevel == RUN_GO) ? global_clock : (Dura){0, 0}).write_15(msg+1);
-  msg[16] = '$';
+  msg[16] = '\n';
   msg[17] = 0;
   tell_msg();
 }
@@ -903,12 +936,12 @@ void process_complete_command() {
 
 void process_init_command() {
   if (bufi < 2) return;
-  if (buf[0] == '^') {
+  if (buf[0] == '$') {
     int i = 1;
-    for (; i < bufi && buf[i] != '$'; i++) {}
+    for (; i < bufi && buf[i] != '\n'; i++) {}
     if (i < bufi) {
       if (memcmp("IDENTITY", buf+1, 8) != 0) {
-        error_with_message("Expected ^IDENTITY found:", (char*)buf, bufi);
+        error_with_message("Expected $IDENTITY found:", (char*)buf, bufi);
         discard_command();
         return;
       }
@@ -917,7 +950,7 @@ void process_init_command() {
       discard_buf(i+1);
     }
     else if (bufi >= WHON) {
-      error_with_message("^ without $ in: ", (char*)buf, bufi);
+      error_with_message("$ without newline in: ", (char*)buf, bufi);
       discard_command();
     }
     return;
@@ -939,8 +972,10 @@ void process_init_command() {
           error_with_message("Cannot set all on channel Z: ", (char*)buf, 12);
         }
         else {
-          if (!process_ensure_protocol(ch)->parse_all(buf+3)) {
-            error_with_message("Bad =: ", (char*)buf, 56);
+          int err = process_ensure_protocol(ch)->parse_all(buf+3);
+          if (err) {
+            char bad[6]; bad[0] = 'N'; bad[1] = 'o'; bad[2] = '0'+err; bad[3] = ' '; bad[4]='='; bad[5]=0;
+            error_with_message(bad, (char*)(buf+3), 56);
           }         
         }
         discard_buf(56);
@@ -1005,9 +1040,9 @@ void process_runtime_command() {
     switch(b) {
       case '@': /* TODO */ break;
       case '#':
-        msg[0] = '^';
+        msg[0] = '$';
         process_get_channel(ch)->e.write(msg+1);
-        msg[61] = '$';
+        msg[61] = '\n';
         msg[62] = 0;
         Serial.write((char*)msg);
         Serial.send_now();
@@ -1071,9 +1106,9 @@ void loop() {
   bool urgent = false;
   if (next_event < global_clock) {
     urgent = true;
-    if (runlevel == GOGOGO) {
-      bool complete = run_iteration();
-      if (complete) process_stop_running();
+    if (runlevel == RUN_GO) {
+      bool alive = run_iteration();
+      if (!alive) process_stop_running();
     }
     else {
       if (led_is_on) digitalWrite(LED_PIN, LOW);
@@ -1085,7 +1120,7 @@ void loop() {
         case RUN_COMPLETED: delta = (led_is_on) ?  2000 : 2998000; break;
         case RUN_TO_ERROR:  delta = (led_is_on) ? 10000 :   90000; break;
         case RUN_ERROR:     delta = (led_is_on) ? 10000 :  190000; break;
-        default:             delta = (led_is_on) ? 10000 :   40000; break;
+        default:            delta = (led_is_on) ? 10000 :   40000; break;
       }
       next_event += MHZ * delta;
     }

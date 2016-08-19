@@ -20,17 +20,17 @@ TODO: example picture goes here.
 
 Teensy Stimulus has a simple serial protocol for communications.
 
-A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There is only a single variable-length command, which starts with `^` and ends with `$`.
+A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There is only a single variable-length command, which starts with `$` and ends with `\n` (newline).
 
-Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `^` and end with `$`.
+Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `$` and end with `\n`.
 
-The symbols ~, ^, and $ will ONLY appear at the beginning (`~`, `^`) and/or end (`$`) of a command.  No escape sequences are permitted; if one of the above characters needs to be returned it will be replaced with underscore `_`.
+The symbols ~, $, and `\n` (newline) will ONLY appear at the beginning (`~`, `$`) and/or end (`\n`) of a command.  No escape sequences are permitted; if one of the above characters needs to be returned it will be replaced with underscore `_`.
 
-No command or return value may be longer than 60 bytes in addition to the starting `^` and ending `$` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits safely within one 64-byte USB packet sent/received by the board.
+No command or return value may be longer than 60 bytes in addition to the starting `$` and ending `\n` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits safely within one 64-byte USB packet sent/received by the board.
 
 ### Identifying a Teensy Stimulus device
 
-If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `^stim1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `$`.  The string will be at most 60 characters long not counting `^` and `$`, but may be shorter.
+If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `$stim1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `\n`.  The string will be at most 60 characters long not counting `$` and `\n`, but may be shorter.
 
 ### Output channels
 
@@ -111,7 +111,7 @@ A maximum of 254 trains can be stored across all pins.  Each of the 25 initial p
 
 ### Error States
 
-The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: placing an invalid request, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `^error message here$` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
+The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: placing an invalid request, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `$error message here\n` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
 
 ### Executing and Querying a Stimulation Protocol
 
@@ -119,7 +119,7 @@ To run a stimulation protocol on all defined channels, send the command `~*`.  T
 
 To terminate a stimulation protocol in progress, send the command `~/`.  To terminate a single channel while leaving any others still running, use `~A/`.  Once terminated, a channel cannot be restarted.
 
-To ask the board to tell what time point it is at, send the command `~#`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `^an error message here$`.
+To ask the board to tell what time point it is at, send the command `~#`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `$an error message here\n`.
 
 To query the state machine that runs an individual channel, send the command `~A@` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.  Analog stimuli will always report 1 or 3, not 2.
 
@@ -182,7 +182,7 @@ should not be done more than necessary, as eventually the board's EEPROM will we
 The string is
 
 ```
-^IDENTITYyour string here$`
+$IDENTITYyour string here\n`
 ```
 
 Note that there is no space after `IDENTITY` and the string.  When returned, `IDENTITY` will be
@@ -201,8 +201,8 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 | Clear     | `.` | None | Clears errors & protocols. |
 | Refresh   | `"` | None | Restores protocols from prior run to use again. |
 | State?    | `@` | 2 chars | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
-| Report    | `#` | 16 chars | `~01234567.654321` or `^error message$`; time == 0 if not running. |
-| Identity  | `?` | 10-62 chars | `^stim1.0 ` + message + `$` |
+| Report    | `#` | 16 chars | `~01234567.654321` or `$error message\n`; time == 0 if not running. |
+| Identity  | `?` | 10-62 chars | `$stim1.0 ` + message + `\n` |
 
 #### With Parameters
 
@@ -255,7 +255,7 @@ Possible states:
 
 | Command | States Allowed | Behavior when disallowed |
 |---------|----------------|-------------------|
-|`^IDENTITY...$` | `P` | error |
+|`$IDENTITY...\n` | `P` | error |
 | `~*`  | `P`    | error |
 | `~/`  | `R`    | ignored |
 | `~.`  | `ECPR` | N/A |
