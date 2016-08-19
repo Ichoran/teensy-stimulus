@@ -2,24 +2,78 @@
   Run a digital and/or analog stimulus protocol from a Teensy 3.1+ board.
  */
 
+/*
+Teensy Stimulus is essentially a set of simple state machines.
+
+The _main loop_ has four persistent states and two transient states; these
+are present in the variable `runlevel`.
+Persistent states:
+  RUN_ERROR - Indicates an error state.
+    State entered whenever an invalid input is received.
+    State exited only when explicitly reset with `~.` command
+  RUN_PROGRAM - State for setting stimuli.
+    Teensy starts in this state.  Reset `~.` moves to this state.  Refresh `~"` will also from RUN_COMPLETED.
+    State exited when a run starts: `~*` or `~A*` or `~A:blahblah` (or error)
+  RUN_COMPLETED - Indicates that a protocol is done running.
+    State entered when running state is complete.
+    State exited when reset `~.` or refreshed `~"` (to run same program again).
+  RUN_GO - Protocol is running.
+    State entered from RUN_PROGRAM with a run command `~*` `~A*` `~A:blahblah`
+    State exited when stimulus is complete (goes to RUN_COMPLETED state)
+Transient states:
+  RUN_TO_ERROR - Was running, cooling down stimuli, will turn to error within a second or so.
+  RUN_LOCKED - Setting up for something (probably a run).  Transient, very brief (~1 ms).
+
+There is also a state machine that runs every digital channel.
+These are stored in the Channel struct.  In addition to a runlevel (state),
+there are also three separate timers.
+  Global timer `t`: when this is exhausted, the channel is done running.
+  Block transition timer yn: when this is exhausted, switch to the next on or off block (as appropriate)
+  Pulse transition timer pq: when this is exhausted, turn the stimulus on or off (as appropriate)
+There are four runlevels:
+  C_ZZZ - Channel is sleeping.  Timers are irrelevant.
+  C_WAIT - In an off block.  When yn is exhausted, turn on to C_HI.
+  C_LO - In an on block, but stimulus is off.  Turn it on when pq is exhausted, or go back to C_WAIT if pq is exhausted.
+  C_HI - Stimulus is on!  If pq exahausted, turn off and go to C_LO.  If yn exhuasted, turn off and go to C_WAIT.
+  If t is ever exhausted, turn off stimulus and go to C_ZZZ.
+
+There is a similar state machine for analog channels.  This is still under development, so isn't described.
+*/
+
+
 #include <EEPROM.h>
 #include <math.h>
 
+// Note: the Teensy 3.1 and 3.2 can be "overclocked" to 96 MHz, but 72 MHz is their operating speed.
+// 72 MHz is plenty for our purposes.
 #define MHZ 72
 #define HTZ 72000000
 
+// This is the hardware pin attached to the on-chip LED.
 #define LED_PIN 13
 
+// The digital channels supported; these correspond to letters 'A' through 'X', with the last being the LED pin.
 #define DIG 24
 int digi[DIG] = { 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
 
+// The analog channels supported; support is a fiction currently.
 #define ANA 1
-int16_t wave[256];
+#define ANALOG_DIVS 4096d
+int16_t wave[ANALOG_DIVS];
 
 
-/*******************************
- * Duration class, effectively *
- *******************************/
+/******************************
+ * Primary timekeeping struct *
+ ******************************
+ * 
+ * Time is stored as seconds plus ticks, so it's dependent on the clock rate.
+ * It's really intended that times will be used going forward, and that you mostly
+ * want to check when one duration has passed another.
+ *
+ * All comparison operators could be defined, but I've only bothered with < right now.
+ *
+ * Only positive times are supported.
+**/
 
 struct Dura {
   int s;  // Seconds
@@ -116,7 +170,10 @@ struct Dura {
 
 /************************
  * Protocol information *
- ************************/
+ ************************
+ *
+ * Struct that defines a stimulus protocol.  Fields describe how they are used.
+**/
 
 #define PROT 254
 
@@ -134,6 +191,7 @@ struct Protocol {
 
   void init() { *this = {{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, 'u', ' ', 255, 255}; }
 
+  // Parse one duration given by a label
   bool parse_labeled(byte label, byte *input) {
     Dura x; x = {0, 0}; x.parse(input, 8);
     if (x.s < 0 || x.k < 0) return false;
@@ -150,6 +208,7 @@ struct Protocol {
     return true;
   }
 
+  // Parse all durations (digital only)
   bool parse_all(byte *input) {
     for (int i = 1; i < 6; i++) if (input[i*8] != ';') return false;
     Dura x; x = {0, 0};
@@ -163,17 +222,22 @@ struct Protocol {
     return true;
   }
 
+  // Reshuffles all protocols so only this one is ready to run.
+  // We are placed first within the supplied buffer.  Length
+  // is placed in &pi.
   void solo(Protocol *ps, int &pi) {
     int i = 0;
     ps[i] = *this;
     while (i+1 < PROT && ps[i].next < PROT) {
-      ps[i+1] = ps[ps[i].next];
-      ps[i].next = (byte)(i+1);
+      ps[i+1] = ps[ps[i].next];  // We are copying all the data, not just pointers!
+      ps[i].next = (byte)(i+1);  // Point existing one at new (probably lower) index.
       i++;
     }
+    // Last one will point at 255 (terminator), and that doesn't change!
     pi = i;
   }
 
+  // Set all protcols to empty
   static void init(Protocol *ps, int &pi) {
     for (int i = 0; i < DIG+ANA; i++) ps[i].init();
     for (int i = DIG; i < DIG+ANA; i++) ps[i].j = 'l';
@@ -181,15 +245,16 @@ struct Protocol {
   }
 };
 
-Protocol protocols[PROT];
-int proti = 0;
+Protocol protocols[PROT]; // Slots for protocol inforation
+int proti = 0;            // Next available protocol index
 Protocol not_a_protocol = (Protocol){{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, ' ', ' ', 255, 255};
 
 
 
 /*********************************
  * Channel information & running *
- *********************************/
+ *********************************
+**/
 
 struct ChannelError {
   int nstim;     // Number of stimuli scheduled to start
@@ -222,7 +287,7 @@ struct ChannelError {
 
 #define ANALOG_ZERO 2047
 #define ANALOG_AMPL 2047
-#define ANALOG_DIVS 16384
+#define ANALOG_BITS 12
 
 #define CHAN (DIG+ANA)
 
@@ -559,8 +624,8 @@ void init_eeprom() {
 }
 
 void init_analog() {
-  for (int i = 0; i < 256; i++) wave[i] = (int16_t)round(ANALOG_DIVS*sin(i * 2 * (M_PI / 256)));
-  analogWriteResolution(12);
+  for (int i = 0; i < ANALOG_DIVS; i++) wave[i] = ANALOG_ZERO + (int16_t)round(ANALOG_AMPL*sin(i * 2 * (M_PI / ANALOG_DIVS)));
+  analogWriteResolution(ANALOG_BITS);
   analogWrite(A14, ANALOG_ZERO);
 }
 
@@ -574,20 +639,20 @@ void init_digital() {
  * Runtime *
  ***********/
 
-volatile int tick;       // Last CPU clock count
-Dura global_clock;       // Time since start of running.
-Dura next_event;         // Time of next event.  Just busywait until then.
+volatile int tick;        // Last CPU clock count
+Dura global_clock;        // Time since start of running.
+Dura next_event;          // Time of next event.  Just busywait until then.
 
 #define MIN_BUSY_US 1000
 #define MAX_BUSY_US 20000
-Dura io_anyway;          // Time at which you need to read I/O even if it may interfere with events
+Dura io_anyway;           // Time at which you need to read I/O even if it may interfere with events
 
-#define LOCKED  -3
-#define ERRDONE -2
-#define ERRSTOP -1
-#define RUNSTOP  0
-#define RUNSET   1
-#define GOGOGO   2
+#define RUN_LOCKED   -3
+#define RUN_ERROR    -2
+#define RUN_TO_ERROR -1
+#define RUN_COMPLETED 0
+#define RUN_PROGRAM   1
+#define RUN_GO        2
 volatile int runlevel;   // -2 error; -1 stopping to error; 0 ran; 1 accepting commands; 2 running
 volatile int alive;      // Number of channels alive and running
 
@@ -598,7 +663,7 @@ void error_with_message(const char* what, int n, const char* detail, int m) {
     for (int i = 0; i < n && erri < MSGN; i++) { char c = what[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
     for (int i = 0; i < m && erri < MSGN; i++) { char c = detail[i]; msg[erri] = c; if (c == 0) break; erri += 1; }
   }
-  if (runlevel != ERRDONE) runlevel = ERRSTOP;
+  if (runlevel != RUN_ERROR) runlevel = RUN_TO_ERROR;
 }
 
 void error_with_message(const char* what, const char* detail, int m) { error_with_message(what, MSGN, detail, m); }
@@ -607,23 +672,32 @@ void error_with_message(const char* what, int n, const char* detail) { error_wit
 
 void error_with_message(const char* what, const char* detail) { error_with_message(what, MSGN, detail, MSGN); }
 
+void error_with_message(const char* what, char letter) {
+  tiny[2];
+  tiny[0] = letter;
+  tiny[1] = 0;
+  error_with_message(what, tiny, 1);
+}
+
+void error_with_message(const char* what) { error_with_message(what, MSGN, "", 0); }
+
 void analog_cooldown() {
-  if (runlevel == ERRSTOP) {
+  if (runlevel == RUN_TO_ERROR) {
     if (channels[DIG].who == 255) {
       if (channels[DIG].zero != 255) analogWrite(A14, ANALOG_ZERO);
-      runlevel = ERRDONE;
+      runlevel = RUN_ERROR;
     }
     else {
       // TODO--nice cooldown!
       analogWrite(A14, ANALOG_ZERO);
-      runlevel = ERRDONE;
+      runlevel = RUN_ERROR;
     }
   }
 }
 
 void go_go_go() {
-  if (runlevel == RUNSET) {
-    runlevel = LOCKED;
+  if (runlevel == RUN_PROGRAM) {
+    runlevel = RUN_LOCKED;
     alive = 0;
     if (led_is_on) {
       led_is_on = false;
@@ -648,10 +722,10 @@ void go_go_go() {
     io_anyway = global_clock;
     io_anyway += MHZ * MAX_BUSY_US;
     tick = ARM_DWT_CYCCNT;
-    runlevel = GOGOGO;
+    runlevel = RUN_GO;
   }
-  else if (runlevel != ERRDONE && runlevel != ERRSTOP) {
-    error_with_message("Attempt to start running from invalid state.", "");
+  else if (runlevel != RUN_ERROR && runlevel != RUN_TO_ERROR) {
+    error_with_message("Attempt to start running from invalid state.");
   }
 }
 
@@ -670,28 +744,18 @@ bool run_iteration() {
  *******************/
 
 Channel* process_get_channel(byte ch) {
-  if (ch >= 'A' && ch <= 'Z' && ch != 'Y') {
-    return channels + ((ch == 'Z') ? 25 : (ch - 'A'));
-  } 
+  if (ch >= 'A' && (ch < ('A'+DIG) || ch == 'Z')) return channels + ((ch == 'Z') ? DIG : (ch - 'A'));
   else {
-    char tiny[2];
-    tiny[0] = ch;
-    tiny[1] = 0;
-    error_with_message("Unknown channel ", tiny, 1);
+    error_with_message("Unknown channel ", (char)ch);
     return &not_a_channel; 
   }
 }
 
 Protocol* process_get_protocol(byte ch) {
   Channel *c = process_get_channel(ch);
-  if (c->who != 255) {
-    return protocols + c->who;
-  }
+  if (c->who != 255) return protocols + c->who;
   else {
-    char tiny[2];
-    tiny[0] = ch;
-    tiny[1] = 0;
-    error_with_message("No protocol for channel ", tiny, 1);
+    error_with_message("No protocol for channel ", (char)ch);
     return &not_a_protocol;
   }
 }
@@ -735,13 +799,13 @@ void process_reset() {
   Channel::init(channels);
   erri = 0;
   alive = 0;
-  runlevel = RUNSET;
+  runlevel = RUN_PROGRAM;
 }
 
 void process_refresh() {
-  if (runlevel == RUNSTOP) {
+  if (runlevel == RUN_COMPLETED) {
     Channel::refresh(channels, protocols);
-    runlevel = RUNSET;  
+    runlevel = RUN_PROGRAM;  
   }
 }
 
@@ -764,13 +828,13 @@ void process_start_running(byte who) {
 
 void process_stop_running(byte who) {
   Channel *c = process_get_channel(who);
-  if (runlevel == GOGOGO) {
+  if (runlevel == RUN_GO) {
     if (c->who != 255) {
       c->pin_low();
       c->runlevel = C_ZZZ;
       c->who = 255;
       if (alive > 0) alive -= 1;
-      if (alive == 0) runlevel = RUNSTOP;
+      if (alive == 0) runlevel = RUN_COMPLETED;
     }
   }
 }
@@ -785,12 +849,12 @@ void process_stop_running() {
     }
   }
   alive = 0;
-  runlevel = RUNSTOP;
+  runlevel = RUN_COMPLETED;
 }
 
 void process_say_the_time() {
   msg[0] = '^';
-  ((runlevel == GOGOGO) ? global_clock : (Dura){0, 0}).write_15(msg+1);
+  ((runlevel == RUN_GO) ? global_clock : (Dura){0, 0}).write_15(msg+1);
   msg[16] = '$';
   msg[17] = 0;
   tell_msg();
@@ -976,7 +1040,7 @@ void process_runtime_command() {
 
 // Setup runs once at reset / power on
 void setup() {
-  runlevel = RUNSTOP;
+  runlevel = RUN_LOCKED;
   alive = 0;
   init_eeprom();
   init_digital();
@@ -991,7 +1055,7 @@ void setup() {
   next_event = (Dura){ 0, 0 };
   led_is_on = false;
   tick = ARM_DWT_CYCCNT;
-  runlevel = RUNSET;
+  runlevel = RUN_PROGRAM;
 }
 
 #ifdef YELL_DEBUG
@@ -1017,16 +1081,16 @@ void loop() {
       led_is_on = !led_is_on;
       delta = 0;
       switch(runlevel) {
-        case RUNSET:  delta = (led_is_on) ?  2000 :  998000; break;
-        case RUNSTOP: delta = (led_is_on) ?  2000 : 2998000; break;
-        case ERRSTOP: delta = (led_is_on) ? 10000 :   90000; break;
-        case ERRDONE: delta = (led_is_on) ? 10000 :  190000; break;
-        default:      delta = (led_is_on) ? 10000 :   40000; break;
+        case RUN_PROGRAM:   delta = (led_is_on) ?  2000 :  998000; break;
+        case RUN_COMPLETED: delta = (led_is_on) ?  2000 : 2998000; break;
+        case RUN_TO_ERROR:  delta = (led_is_on) ? 10000 :   90000; break;
+        case RUN_ERROR:     delta = (led_is_on) ? 10000 :  190000; break;
+        default:             delta = (led_is_on) ? 10000 :   40000; break;
       }
       next_event += MHZ * delta;
     }
   }
-  if (runlevel == ERRSTOP) analog_cooldown();
+  if (runlevel == RUN_TO_ERROR) analog_cooldown();
   if (!urgent || io_anyway < global_clock) {
     Dura soon = global_clock;
     soon += MHZ * MIN_BUSY_US;
@@ -1034,10 +1098,10 @@ void loop() {
       // Do not need to busywait for next event
       drain_to_buf();
       switch(runlevel) {
-        case ERRDONE: process_error_command(); break;
-        case RUNSTOP: process_complete_command(); break;
-        case RUNSET: process_init_command(); break;
-        case GOGOGO: process_runtime_command(); break;
+        case RUN_ERROR:     process_error_command(); break;
+        case RUN_COMPLETED: process_complete_command(); break;
+        case RUN_PROGRAM:   process_init_command(); break;
+        case RUN_GO:        process_runtime_command(); break;
         default: break;
       }
 #ifdef YELL_DEBUG
