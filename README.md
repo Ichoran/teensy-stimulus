@@ -316,6 +316,20 @@ There are a few things to note about this protocol.  First, some dead time is in
 
 would work just as well to give a single 6 ms pulse (because the pulse up time of 1000s expires before pulse time of 6 ms + pulse down time of 1994 ms).
 
+## Operational Details
+
+### Digital Pulse Timing
+
+In the absense of analog output, processing time (assuming the default clock rate of 72 MHz) is about 6 microseconds per channel.  This governs both minimum pulse width and maximum synchrony.  Two stimuli that are scheduled for identical times will be triggered in order of processing, which goes pin by pin from `A` to `X`.  If a pin is not used, it requires about 0.25 microseconds to skip it; if it is used, it requires about 6 microseconds to process.  Thus, outputs that should be tightly synchronized should be on adjacent pins, but if only two outputs are used, it doesn't matter very much.  (Adjacent pins: 6 us, maximally separated pins (A to X), 10 us.)
+
+Beyond the pin-to-pin delay, jitter is possible.  A maximum of about 2 microseconds has been observed.
+
+Non-synchronous inputs are have additional computational delays as the board checks for input and updates global counters.  Sequential events can be spaced no more closely than about 16 microseconds apart (across all pins); there may be jitter in this timing of up to about 7.5 microseconds.
+
+Note that because the board is globally clocked, this jitter does not propagate.  Thus, a single channel 20 kHz square wave is maintained perfectly on average, but has about 10% jitter in the signal (18-22 kHz).
+
+Timing of stimulus train switches has not yet been measured.
+
 ## Revision Notes
 
 Initial revision.
