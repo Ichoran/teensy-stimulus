@@ -363,8 +363,9 @@ struct Channel {
   bool run_next_protocol(Protocol *ps, Dura d) {
     Protocol *p = ps + who;
     pin_off(p);
-    if (p->next < 255) {
-      p = ps + p->next;
+    who = p->next;
+    if (who < 255) {
+      p = ps + who;
       pin_off(p);
       runlevel = C_WAIT; // Debug::shout(__LINE__, pin, runlevel, d);
       t = p->t; t += d;
@@ -372,7 +373,6 @@ struct Channel {
       return true;
     }
     else {
-      who = 255;
       digitalWrite(pin, LOW);
       runlevel = C_ZZZ;
       return false;
