@@ -13,12 +13,12 @@ Persistent states:
     State exited only when explicitly reset with `~.` command
   RUN_PROGRAM - State for setting stimuli.
     Teensy starts in this state.  Reset `~.` moves to this state.  Refresh `~"` will also from RUN_COMPLETED.
-    State exited when a run starts: `~*` or `~A*` or `~A:blahblah` (or error)
+    State exited when a run starts: `~*` or `~A*` or `~A:100.0000;...` (or error)
   RUN_COMPLETED - Indicates that a protocol is done running.
     State entered when running state is complete.
     State exited when reset `~.` or refreshed `~"` (to run same program again).
   RUN_GO - Protocol is running.
-    State entered from RUN_PROGRAM with a run command `~*` `~A*` `~A:blahblah`
+    State entered from RUN_PROGRAM with a run command `~*` `~A*` `~A:100.0000;...`
     State exited when stimulus is complete (goes to RUN_COMPLETED state)
 Transient states:
   RUN_TO_ERROR - Was running, cooling down stimuli, will turn to error within a second or so.
@@ -55,6 +55,11 @@ There is a similar state machine for analog channels.  This is still under devel
 // The digital channels supported; these correspond to letters 'A' through 'X', with the last being the LED pin.
 #define DIG 24
 int digi[DIG] = { 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+bool assume_in[DIG] = {
+  false, false, false, false, true, true, true, true, true,
+  false, false, false, false, false, false, false, false, false, false, false, false, false,
+  false
+};
 
 // The analog channels supported; support is a fiction currently.
 #define ANA 1
@@ -334,6 +339,7 @@ struct Channel {
     *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 0, 255, 255, {0, 0, 0, 0, 0, 0, 0, 0} };
     pin = (index < DIG) ? digi[index] : 255;
     zero = 255;
+    if (index < DIG && assume_in[index]) pinMode(index, INPUT);
   }
 
   void refresh(Protocol *ps) {
@@ -372,11 +378,12 @@ struct Channel {
       yn = p->d; yn += d;
       return true;
     }
-    else {
+    else if (zero < 255) {
       digitalWrite(pin, LOW);
       runlevel = C_ZZZ;
       return false;
     }
+    else return false;
   }
 
   bool alive() { return runlevel != C_ZZZ && who != 255; }
@@ -598,6 +605,23 @@ void tell_msg() {
   Serial.send_now();
 }
 
+void write_voltage_5(int digital_value, char* buffer, bool digital) {
+  int v = 0;
+  if (digital) {
+    if (digital_value > 0) v = 5000;
+  }
+  else {
+    v = (3300 * digital_value + (1 << (ANALOG_BITS-1)))/(1 << ANALOG_BITS);
+    if (v < 1) v = 1;
+    if (v > 3300) v = 3300;    
+  }
+  buffer[0] = (char)('0' + (v/1000));
+  buffer[1] = '.';
+  buffer[2] = (char)('0' + ((v/100)%10));
+  buffer[3] = (char)('0' + ((v/10)%10));
+  buffer[4] = (char)('0' + (v % 10));
+}
+
 
 
 /*********************************************
@@ -653,12 +677,20 @@ void init_eeprom() {
 
 void init_analog() {
   for (int i = 0; i < ANALOG_DIVS; i++) wave[i] = ANALOG_ZERO + (int16_t)round(ANALOG_AMPL*sin(i * 2 * (M_PI / ANALOG_DIVS)));
+  analogReadResolution(ANALOG_BITS);
   analogWriteResolution(ANALOG_BITS);
   analogWrite(A14, ANALOG_ZERO);
 }
 
 void init_digital() {
-  for (int i = 0; i<DIG; i++) { pinMode(i, OUTPUT); digitalWrite(i, LOW); }
+  for (int i = 0; i<DIG; i++) { 
+    int pi = digi[i];
+    if (assume_in[i]) pinMode(pi, INPUT);
+    else { pinMode(pi, OUTPUT); digitalWrite(pi, LOW); }
+  }
+  // Override whatever else happens to make LED work.
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
 }
 
 
@@ -803,6 +835,10 @@ Protocol* process_ensure_protocol(byte ch) {
   else if (proti < PROT) {
     c->zero = proti;
     c->who = c->zero;
+    if (c->pin < 255) {
+      if (c->pin != LED_PIN) pinMode(c->pin, OUTPUT);
+      digitalWrite(c->pin, LOW);
+    }
     protocols[proti].init();
     proti++;
     return protocols + c->who;
@@ -893,6 +929,46 @@ void process_say_the_time() {
   tell_msg();
 }
 
+int median_of_three(int a, int b, int c) {
+  if (a < b) {
+    if (b < c) return b;
+    if (a < c) return c;
+    return a;
+  }
+  if (c < b) return b;
+  if (c < a) return c;
+  return a;
+}
+
+int process_get_analog(int channel) {
+  int mmm[3];
+  int mm[3];
+  int m[3];
+  for (int i=0; i < 3; i++) {
+    for (int j=0; j < 3; j++) {
+      for (int k=0; k < 3; k++) m[k] = analogRead(channel);
+      mm[j] = median_of_three(m[0], m[1], m[2]);
+    }
+    mmm[i] = median_of_three(mm[0], mm[1], mm[2]);
+  }
+  return median_of_three(mmm[0], mmm[1], mmm[2]);
+}
+
+void process_say_the_voltage(char ch) {
+  if (ch == 'X' || ch == 'Z') error_with_message("Cannot ever read input on this channel: ", ch);
+  else {
+    Channel *c = process_get_channel(ch);
+    if (c->zero != 255) error_with_message("Channel voltage request not valid because running on: ", ch);
+    else {
+      pinMode(digi[ch - 'A'], INPUT);
+      msg[0] = '~';
+      write_voltage_5((ch <= 'J') ? process_get_analog(ch - 'A') : digitalRead(ch - 'K'), (char*)(msg+1), ch > 'J');
+      msg[6] = 0;
+      tell_msg();
+    }          
+  }
+}
+
 void process_error_command() {
   if (bufi < 2) return;
   if (buf[0] != '~') {
@@ -928,6 +1004,7 @@ void process_complete_command() {
       if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
         if (bufi < 3) return;
         if (buf[2] == '/') { discard_buf(3); return; }
+        else if (buf[2] == '?') { process_say_the_voltage(buf[1]); return; }
       }
       error_with_message("Command not valid (run complete): ", (char*)buf, 2);
   }
@@ -962,6 +1039,7 @@ void process_init_command() {
     b = buf[2];
     switch(b) {
       case '@': Serial.write("~."); Serial.send_now(); break;
+      case '?': process_say_the_voltage(ch); break;
       case '*': process_start_running(ch); break;
       case '/': break;
       case '&': process_new_protocol(ch); break;
@@ -1048,6 +1126,7 @@ void process_runtime_command() {
         Serial.send_now();
         break;
       case '/': process_stop_running(ch); break;
+      case '?': process_say_the_voltage(ch); break;
       default:
         error_with_message("Channel command not valid (running): ", (char*)buf, 3);
     }

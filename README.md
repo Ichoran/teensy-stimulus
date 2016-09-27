@@ -4,7 +4,7 @@ Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
+Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).  You can also query the voltage of pins not used for output.
 
 ## Constructing Stimuli
 
@@ -39,6 +39,10 @@ Each digital output channel is identified by a capital letter that refers to its
 The analog output channel is specified by `Z` and is on pin A14/DAC.
 
 Note that pins do not turn on precisely simultaneously even if scheduled at the same time.  Lower-lettered pins turn on before higher-lettered ones; the latency between each pin state change and the next is at most a few microseconds, but if timing of that precision is important, you should measure it and not take the simultaneity for granted.
+
+### Input channels
+
+Pins `A` through `J` can read analog voltage (0-5V) if not being used for output.  Pins `K` through `W` can read digital state (reported as 0.000 or 5.000 voltage).  Pins `X` and `Z` cannot be used for reading.
 
 ### Durations and Other Numbers
 
@@ -174,6 +178,8 @@ Feedback: `@` checks the run level; `#` gets details; `?` gets messages.
 
 Channels: `=` sets everything.  `:` sets and runs everything.  `&` starts a new thing.
 
+Sensors: `^` reads voltage (0.000 / 5.000 if digital pin)
+
 ### Setting Identity (do this first, but only once!)
 
 You can give the board an identifying string of up to 52 characters in length.  This
@@ -227,6 +233,7 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 | Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal. |
 | Triangular      | `r` | None | Analog stimulus should be triangular. |
 | Append train    | `&` | None | Adds a new stimulus train to follow the existing one. |
+| Query voltage   | `?` | 6 chars | `~` followed by voltage in `D.DDD` format (5 digits) |
 
 #### With Parameters
 
@@ -282,6 +289,7 @@ Possible states:
 | `~Za` | `P`    | error (including if not `Z`) |
 | `~A=` | `P`    | error |
 | `~A:` | `P`    | error (including if `Z`) |
+| `~A?` | `CPR`  | error if running output on `A`; can't use on `X` or `Z` |
 
 
 ## Examples
