@@ -662,7 +662,8 @@ void eeprom_read_who() {
   for (; i < WHON-1; i++) {
     byte ei = EEPROM.read(i-1);
     if (!ei) break;
-    whoami[i] = ei;
+    if (ei == '~' || ei == '$' || ei == '\n') whoami[i] = '?';
+    else whoami[i] = ei;
   }
   whoami[i] = '\n';
   whoi = i+1;
@@ -672,8 +673,8 @@ void eeprom_read_who() {
 void tell_who() { Serial.write(whoami, whoi); Serial.send_now(); }
 
 void init_eeprom() {
-  bool first = eeprom_set((byte*)"stim1.0 ", 0, WHON, false);
-  if (first) eeprom_set((byte*)"", 8, WHON, true);
+  bool first = eeprom_set((byte*)"Ticklish1.0 ", 0, WHON, false);
+  if (first) eeprom_set((byte*)"", 12, WHON, true);
   eeprom_read_who();
 }
 
@@ -1031,7 +1032,7 @@ void process_init_command() {
         discard_command();
         return;
       }
-      eeprom_set(buf + 9, 8, i - 9, true);
+      eeprom_set(buf + 9, 12, i - 9, true);
       eeprom_read_who();
       discard_buf(i+1);
     }
