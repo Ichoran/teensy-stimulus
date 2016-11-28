@@ -1,6 +1,6 @@
-# LabView interface to Teensy-Stimulus
+# LabView interface to Ticklish
 
-The Virtual Instrument here contains a minimal interface to the Teensy Stimulus
+The Virtual Instrument here contains a minimal interface to the Ticklish
 system running on a Teensy board.  The main sub-VI can be detatched and used in
 other VIs.
 

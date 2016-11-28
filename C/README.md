@@ -1,7 +1,8 @@
-# C interface to Teensy-Stimulus
+# C interface to Ticklish
 
-The files here contain a minimal interface to the Teensy Stimulus board
-usable from C or languages that have a C interface.
+The files here contain a minimal C interface to the Ticklish stimulus delivery
+software for the Teensy 3 series of boards.  You can also use this interface
+from languages with a C FFI (foreign function interface).
 
 ## Requirements
 

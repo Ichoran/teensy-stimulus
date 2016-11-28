@@ -3,7 +3,7 @@
  */
 
 /*
-Teensy Stimulus is essentially a set of simple state machines.
+Ticklish is essentially a set of simple state machines.
 
 The _main loop_ has four persistent states and two transient states; these
 are present in the variable `runlevel`.
@@ -12,7 +12,7 @@ Persistent states:
     State entered whenever an invalid input is received.
     State exited only when explicitly reset with `~.` command
   RUN_PROGRAM - State for setting stimuli.
-    Teensy starts in this state.  Reset `~.` moves to this state.  Refresh `~"` will also from RUN_COMPLETED.
+    Ticklish starts in this state.  Reset `~.` moves to this state.  Refresh `~"` will also from RUN_COMPLETED.
     State exited when a run starts: `~*` or `~A*` or `~A:100.0000;...` (or error)
   RUN_COMPLETED - Indicates that a protocol is done running.
     State entered when running state is complete.
@@ -37,7 +37,8 @@ There are four runlevels:
   C_HI - Stimulus is on!  If pq exahausted, turn off and go to C_LO.  If yn exhuasted, turn off and go to C_WAIT.
   If t is ever exhausted, turn off stimulus and go to C_ZZZ.
 
-There is a similar state machine for analog channels.  This is still under development, so isn't described.
+There is supposed to be a similar state machine for analog channels, but there isn't yet.  Also, it will use
+interrupts to maintain a nice waveform.
 */
 
 
@@ -46,6 +47,7 @@ There is a similar state machine for analog channels.  This is still under devel
 
 // Note: the Teensy 3.1 and 3.2 can be "overclocked" to 96 MHz, but 72 MHz is their operating speed.
 // 72 MHz is plenty for our purposes.
+// Needs to be altered for 3.5 or 3.6 if they run at full speed (120 or 180 MHz respectively).
 #define MHZ 72
 #define HTZ 72000000
 

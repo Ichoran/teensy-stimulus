@@ -1,18 +1,18 @@
-package lab.kerrr.teensystim
+package lab.kerrr.ticklish
 
 import java.time._
 
-sealed trait TeensyState { def indicator: Char }
-object TeensyState {
-  object Running extends TeensyState { def indicator = '*' }
-  object Errored extends TeensyState { def indicator = '!' }
-  object AllDone extends TeensyState { def indicator = '/' }
-  object Program extends TeensyState { def indicator = '.' }
+sealed trait TicklishState { def indicator: Char }
+object TicklishState {
+  object Running extends TicklishState { def indicator = '*' }
+  object Errored extends TicklishState { def indicator = '!' }
+  object AllDone extends TicklishState { def indicator = '/' }
+  object Program extends TicklishState { def indicator = '.' }
   val allStates = Vector(Running, Errored, AllDone, Program)
   val charToState = allStates.map(x => x.indicator -> x).toMap
 }
 
-object TeensyUtil {
+object TicklishUtil {
   def encodeTime(t: Duration): String = {
     val sec = t.getSeconds
     if (sec > 99999999) "99999999"
@@ -36,14 +36,14 @@ object TeensyUtil {
   }
 
   def decodeVoltage(s: String): Float = s.toFloat
-  def decodeState(s: String): TeensyState = TeensyState.charToState(s.head)
+  def decodeState(s: String): TicklishState = TicklishState.charToState(s.head)
 
   def encodeName(name: String): String = f"IDENTITY$name"
   def decodeName(s: String): String =
-    if (isTeensy(name)) name drop 8
+    if (isTicklish(name)) name drop 8
     else throw new IllegalArgumentException("Unknown device type")
 
-  def isTeensy(s: String): Boolean = s.startsWith("stim1.0 ")
+  def isTicklish(s: String): Boolean = s.startsWith("Ticklish1.0 ")
 
   def isTimeReport(s: String): Boolean = s.length == 15 && {
     var i = 0

@@ -1,19 +1,22 @@
-# Scala interface to Teensy-Stimulus
+# Scala interface to Ticklish
 
-The files here contain a minimal interface to the Teensy Stimulus board
-usable from Scala.  Interfacing with Java is similar, if more wordy.
+The files here contain a minimal Scala interface to the Ticklish stimulus
+delivery software for the Teensy 3.0 board.
 
 ## Requirements
 
 You must have Java 1.8 and SBT installed.  SBT will take care of handling
 dependencies (which are Scala 2.12 and JSSC 2.8).
 
+If you want to just use Java, use the Scala interface.  You may need to
+write a few wrappers.
+
 ## Usage
 
 The source here is intended to be used as a template, not as a module to
 be called.
 
-There are a few utility methods provided in the `TeensyUtil` object for
+There are a few utility methods provided in the `TicklishUtil` object for
 encoding and decoding requests and responses.
 
 ## Timing and Threading

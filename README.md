@@ -1,10 +1,10 @@
-# teensy-stimulus
+# Ticklish
 
-Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for animal behavior experiments.
+Ticklish allows Teensy 3.1 boards to provide stimulus trains suitable for animal behavior experiments.
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
+Ticklish allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
 
 You can also query the voltage of analog-capable pins not used for output, or the high/low state of digital-capable pins not used for output.  Neither the LED pin nor the analog-out pin can be queried.
 
@@ -20,9 +20,9 @@ Due to the limitations of the Teensy 3.1 analog/digital outputs, one cannot mix 
 
 TODO: example picture goes here.
 
-## Communicating with a Teensy Stimulus device
+## Communicating with a Ticklish device
 
-Teensy Stimulus has a simple serial protocol for communications.
+Ticklish has a simple serial protocol for communications.
 
 A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There is only a single variable-length command, which starts with `$` and ends with `\n` (newline).
 
@@ -32,9 +32,9 @@ The symbols ~, $, and `\n` (newline) will ONLY appear at the beginning (`~`, `$`
 
 No command or return value may be longer than 60 bytes in addition to the starting `$` and ending `\n` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits safely within one 64-byte USB packet sent/received by the board.
 
-### Identifying a Teensy Stimulus device
+### Identifying a Ticklish device
 
-If you send the command `~?`, a Teensy Stimulus device will respond with a string that starts with `$stim1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `\n`.  The string will be at most 60 characters long not counting `$` and `\n`, but may be shorter.
+If you send the command `~?`, a Ticklish device will respond with a string that starts with `$Ticklish1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `\n`.  The string will be at most 60 characters long not counting `$` and `\n`, but may be shorter.
 
 ### Output channels
 
@@ -50,7 +50,7 @@ Pins `A` through `J` can read analog voltage (0-5V) if not being used for output
 
 ### Durations and Other Numbers
 
-Teensy stimulus measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
+Ticklish measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
 
 Note also that the internal clock on the Teensy 3.1 is not accurate to one part in a hundred million (or even one in a million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
 
@@ -119,7 +119,7 @@ A maximum of 254 trains can be stored across all pins.  Each of the 25 initial p
 
 ### Error States
 
-The Teensy Stimulus state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: placing an invalid request, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `$error message here\n` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
+The Ticklish state machine contains a single error state.  The machine can enter this state in response to invalid input that is dangerous to ignore: placing an invalid request, trying to specify more states than are allowed, or setting parameters into an already-running protocol.  When in an error state, the system will accept commands but not parse any of them save for `~@` which will return `~!` if there is an error (that command will return `~.` when there is no error and is awaiting commands, `~*` when running, and `~/` when finished running but not reset); for `~#` which will report the error state (as `$error message here\n` where the message hopefully contains some information about what went wrong); and for `~.` which will reset and clear the error state (at which point it can no longer be read out).
 
 ### Executing and Querying a Stimulation Protocol
 
@@ -131,7 +131,7 @@ To ask the board to tell what time point it is at, send the command `~#`.  If th
 
 To query the state machine that runs an individual channel, send the command `~A@` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.  Analog stimuli will always report 1 or 3, not 2.
 
-The Teensy Stimulus board will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A#` (for channel `A`).  It will respond with 8 numbers (after a `~`):
+Ticklish will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A#` (for channel `A`).  It will respond with 8 numbers (after a `~`):
 
 1. The number of stimuli that should have started (9 digits)
 2. The number of stimuli that were missed (6 digits)
@@ -164,15 +164,15 @@ While a stimulus protocol is running, the LED will be off by default.  If there 
 
 When a stimulus protocol has finished, the LED will flash briefly once every three seconds.
 
-## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
+## Loading the Ticklish program onto a Teensy 3.1 or later board
 
 If you use the Arduino IDE with the standard loader, you should be able to simply run the IDE, compile with control-R, and press the button on the Teensy to load the program.
 
 ## Implementation Details
 
-The code running on the Teensy is a not-very-straightforward state machine to run the digital outputs plus interrupts as needed to run the analog output.  Presently, reading the source code (in the `teensy-stim` directory) is the best way to learn about the functioning of the state machine.
+The code running on the Teensy is a not-very-straightforward state machine to run the digital outputs plus interrupts as needed to run the analog output.  Presently, reading the source code (in the `ticklish` directory) is the best way to learn about the functioning of the state machine.
 
-## Complete Teensy Stimulator Command Reference
+## Complete Ticklish Command Reference
 
 ### Handy Mnemonics
 
@@ -182,7 +182,7 @@ Feedback: `@` checks the run level; `#` gets details; `?` gets messages.
 
 Channels: `=` sets everything.  `:` sets and runs everything.  `&` starts a new thing.
 
-Sensors: `^` reads voltage (0.000 / 5.000 if digital pin)
+Sensors: `?` reads voltage (0.000 / 5.000 if digital pin)
 
 ### Setting Identity (do this first, but only once!)
 
@@ -346,4 +346,4 @@ Timing of stimulus train switches has not yet been measured.
 
 ## Revision Notes
 
-Teensy-Stim is currently pre-1.0.
+Ticklish is currently pre-1.0.
