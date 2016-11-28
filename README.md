@@ -4,7 +4,9 @@ Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3.1 or 3.2 board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).  You can also query the voltage of pins not used for output.
+Teensy Stimulus allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).  You can also query the voltage of analog-capable pins not used for output.
+
+The project also contains code to interface with the Teensy in a variety of languages (presently, Scala, C, and LabView).  See the README files in the directories corresponding to each language to learn more.
 
 ## Constructing Stimuli
 
@@ -162,11 +164,11 @@ When a stimulus protocol has finished, the LED will flash briefly once every thr
 
 ## Loading the Teensy Stimulus program onto a Teensy 3.1 or later board
 
-TODO: write this.
+If you use the Arduino IDE with the standard loader, you should be able to simply run the IDE, compile with control-R, and press the button on the Teensy to load the program.
 
 ## Implementation Details
 
-TODO: write this.
+The code running on the Teensy is a not-very-straightforward state machine to run the digital outputs plus interrupts as needed to run the analog output.  Presently, reading the source code (in the `teensy-stim` directory) is the best way to learn about the functioning of the state machine.
 
 ## Complete Teensy Stimulator Command Reference
 
@@ -340,4 +342,4 @@ Timing of stimulus train switches has not yet been measured.
 
 ## Revision Notes
 
-Initial revision.
+Teensy-Stim is currently pre-1.0.
