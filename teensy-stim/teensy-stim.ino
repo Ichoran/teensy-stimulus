@@ -929,6 +929,11 @@ void process_say_the_time() {
   tell_msg();
 }
 
+void process_say_empty() {
+  Serial.write("$\n");
+  Serial.send_now();
+}
+
 int median_of_three(int a, int b, int c) {
   if (a < b) {
     if (b < c) return b;
@@ -979,6 +984,7 @@ void process_error_command() {
   switch(buf[1]) {
     case '@': Serial.write("~!", 2); Serial.send_now(); break;
     case '.': process_reset(); break;
+    case '\'': process_say_empty(); break;
     case '#': tell_msg(); break;
     case '?': tell_who(); break;
     default: break;
@@ -1000,6 +1006,7 @@ void process_complete_command() {
     case '#': process_say_the_time(); break;
     case '?': tell_who(); break;
     case '/': break;
+    case '\'': process_say_empty(); break;
     default:
       if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
         if (bufi < 3) return;
@@ -1094,6 +1101,7 @@ void process_init_command() {
       case '.': process_reset(); break;
       case '#': process_say_the_time(); break;
       case '?': tell_who(); break;
+      case '\'': process_say_empty(); break;
       case '/': break;
       case '*': process_start_running(); break;
       default:
@@ -1139,6 +1147,7 @@ void process_runtime_command() {
       case '#': process_say_the_time(); break;
       case '?': tell_who(); break;
       case '/': process_stop_running(); break;
+      case '\'': process_say_empty(); break;
       default:
         error_with_message("Command not valid (running): ", (char*)buf, 2);
     }

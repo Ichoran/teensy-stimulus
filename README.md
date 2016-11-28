@@ -4,7 +4,9 @@ Teensy Stimulus allows Teensy 3.1 boards to provide stimulus trains suitable for
 
 ## Overview
 
-Teensy Stimulus allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).  You can also query the voltage of analog-capable pins not used for output.
+Teensy Stimulus allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
+
+You can also query the voltage of analog-capable pins not used for output, or the high/low state of digital-capable pins not used for output.  Neither the LED pin nor the analog-out pin can be queried.
 
 The project also contains code to interface with the Teensy in a variety of languages (presently, Scala, C, and LabView).  See the README files in the directories corresponding to each language to learn more.
 
@@ -211,6 +213,7 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 | State?    | `@` | 2 chars | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
 | Report    | `#` | 16 chars | `~01234567.654321` or `$error message\n`; time == 0 if not running. |
 | Identity  | `?` | 10-62 chars | `$stim1.0 ` + message + `\n` |
+| Ping      | `'` | 2 chars | `$\n` regardless (empty variable-length reply) |
 
 #### With Parameters
 
@@ -272,6 +275,7 @@ Possible states:
 | `~@`  | `ECPR` | N/A |
 | `~#`  | `ECPR` | N/A |
 | `~?`  | `ECPR` | N/A |
+| `~'`  | `ECPR` | N/A |
 | `~A*` | `P`    | error |
 | `~A/` | `R`    | ignored |
 | `~A@` | `CPR`  | N/A |
