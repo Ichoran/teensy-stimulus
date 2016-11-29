@@ -89,7 +89,7 @@ Note also that very short stimuli may fail to complete as expected.  The softwar
 
 #### Complete Stimulus Train Specification
 
-A basic digital stimulus train can be set using the `=` command followed by durations for `t`, `d`, `s`, `z`, `p`, and `q`.  Each duration must be separated by `;`.
+A basic digital stimulus train can be set using the `=` command followed by durations for `t`, `d`, `s`, `z`, `p`, and `q`.  Each duration must be separated by `;`.  Finally, a `u` or `i` is given for usual or inverted polarity.
 
 An annotated example is given below.
 
@@ -99,8 +99,8 @@ An annotated example is given below.
   |            |                  /----------------------- Stimulus off duration
   |            |                  |                 /----- Pulse off duration
   v         vvvvvvvv          vvvvvvvv          vvvvvvvv
-~A=00000120;00000030;000000.3;000005.7;0.004500;0.005500
- ^ ^^^^^^^^          ^^^^^^^^          ^^^^^^^^
+~A=00000120;00000030;000000.3;000005.7;0.004500;0.005500u
+ ^ ^^^^^^^^          ^^^^^^^^          ^^^^^^^^         ^- Usual polarity
  |    |                 |                  \-------------- Pulse on duration
  |    |                 \--------------------------------- Stimulus on duration
  |    \--------------------------------------------------- Total stimulus train duration
@@ -182,21 +182,21 @@ Feedback: `@` checks the run level; `#` gets details; `?` gets messages.
 
 Channels: `=` sets everything.  `:` sets and runs everything.  `&` starts a new thing.
 
-Sensors: `?` reads voltage (0.000 / 5.000 if digital pin)
+Sensors: `?` reads voltage (0.000 / 5.000 if digital pin, otherwise in 0-3.3 range)
 
 ### Setting Identity (do this first, but only once!)
 
-You can give the board an identifying string of up to 52 characters in length.  This
+You can give the board an identifying string of up to 48 characters in length.  This
 should not be done more than necessary, as eventually the board's EEPROM will wear out.
 
 The string is
 
 ```
-$IDENTITYyour string here\n`
+$IDENTITYyour string here\n
 ```
 
 Note that there is no space after `IDENTITY` and the string.  When returned, `IDENTITY` will be
-replaced by `stim1.0 ` (with a space); see the `~?` command.
+replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 
 ### Channel-Independent Commands
 
@@ -211,9 +211,9 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 | Clear     | `.` | None | Clears errors & protocols. |
 | Refresh   | `"` | None | Restores protocols from prior run to use again. |
 | State?    | `@` | 2 chars | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
-| Report    | `#` | 16 chars | `~01234567.654321` or `$error message\n`; time == 0 if not running. |
-| Identity  | `?` | 10-62 chars | `$stim1.0 ` + message + `\n` |
-| Ping      | `'` | 2 chars | `$\n` regardless (empty variable-length reply) |
+| Report    | `#` | 16 chars | `$01234567.654321\n` or `$error message\n`; time == 0 if not running. |
+| Identity  | `?` | 10-62 chars | `$Ticklish1.0 ` + message + `\n` |
+| Ping      | `'` | 2 chars | `$\n` (empty variable-length reply) |
 
 #### With Parameters
 
@@ -254,8 +254,8 @@ replaced by `stim1.0 ` (with a space); see the `~?` command.
 | Set pulse off time    | `q` | 8 chars: duration | None | Digital channels only. |
 | Set period            | `w` | 8 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
 | Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Values from 0 to 2047. |
-| Set full protocol     | `=` | 53 chars: 6x8 durations + 5 `;` | None | Digital channels only. |
-| Set and run protocol  | `:` | 53 chars: same as `=` | None | Clears all other protocols. |
+| Set full protocol     | `=` | 54 chars: 6x8 durations + 5 `;` + `u` or `i` | None | Digital channels only. |
+| Set and run protocol  | `:` | 54 chars: same as `=` | None | Clears all other protocols. |
 
 ### Allowed Commands by State
 
@@ -305,7 +305,7 @@ Possible states:
 Suppose we wish to open a valve for 10s after 1500s.  We can set this protocol to run on the first channel as follows:
 
 ```
-~A=00001510;00001500;00000010;0000001;00000010;0000001
+~A=00001510;00001500;00000010;0000001;00000010;0000001u
 ```
 
 Note that the stimulus and pulse times are set to be the same for simplicity, and the off times for each do not really matter as the entire protocol will end then.
@@ -315,17 +315,17 @@ Note that the stimulus and pulse times are set to be the same for simplicity, an
 Suppose we wish to have a digital stimulus that consists of a single pulse of 6 ms.  Suppose further than we wish to wait for 300 seconds, then deliver 50 of these stimuli at 20 second intervals, followed by a 120 second delay and a single test pulse, followed by another 180 second delay and another test pulse.  We can instruct the board to run this protocol on the first output (pin 14) as follows:
 
 ```
-~A=00001290;00000300;00.00600;19.99400;0.006000;0.000001
+~A=00001290;00000300;00.00600;19.99400;0.006000;0.000001u
 ~A&
-~A=00000120;00000110;00.00600;19.99400;0.006000;0.000001
+~A=00000120;00000110;00.00600;19.99400;0.006000;0.000001u
 ~A&
-~A=0170.006;0170.000;00.00600;19.99400;0.006000;0.000001
+~A=0170.006;0170.000;00.00600;19.99400;0.006000;0.000001u
 ```
 
 There are a few things to note about this protocol.  First, some dead time is included after the last stimulus in each case: 10 seconds for the first and second trains.  Second, the up/down time is kept at 6 ms / (20s - 6ms) for the single test pulses just to be consistent (it doesn't matter since the protocol ends before the downtime is complete).  Third, since only a single pulse is desired, the pulse up time is set at least as long as the stimulus on time, which gives just a single pulse.  It would also work to exaggerate the length of the stimulus on time, and have the pulse on/off cycle long enough so there wasn't a second pulse.  For example,
 
 ```
-~A=00000120;00000110;01.00000;19.00000;0.006000;1.994000
+~A=00000120;00000110;01.00000;19.00000;0.006000;1.994000u
 ```
 
 would work just as well to give a single 6 ms pulse (because the pulse up time of 1000s expires before pulse time of 6 ms + pulse down time of 1994 ms).

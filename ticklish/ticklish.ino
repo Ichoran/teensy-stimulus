@@ -255,6 +255,7 @@ struct Protocol {
     x.parse(input + 3*9, 8); if (!x.is_valid()) return 4; z = x;
     x.parse(input + 4*9, 8); if (!x.is_valid()) return 5; p = x;
     x.parse(input + 5*9, 8); if (!x.is_valid()) return 6; q = x;
+    if (input[6*9-1] == 'i') i = 'i'; else if (input[6*9-1] == 'u') i = 'u'; else return 7;
     return 0;
   }
 
@@ -1055,7 +1056,7 @@ void process_init_command() {
       case '&': process_new_protocol(ch); break;
       case '=':
       case ':':
-        if (bufi < 56) return;
+        if (bufi < 57) return;
         if (ch == 'Z') {
           error_with_message("Cannot set all on channel Z: ", (char*)buf, 12);
         }
@@ -1063,10 +1064,10 @@ void process_init_command() {
           int err = process_ensure_protocol(ch)->parse_all(buf+3);
           if (err) {
             char bad[6]; bad[0] = 'N'; bad[1] = 'o'; bad[2] = '0'+err; bad[3] = ' '; bad[4]='='; bad[5]=0;
-            error_with_message(bad, (char*)(buf+3), 56);
+            error_with_message(bad, (char*)(buf+3), 57);
           }         
         }
-        discard_buf(56);
+        discard_buf(57);
         if (b == ':') process_start_running(ch);
         return;
         break;
