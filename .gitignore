@@ -30,3 +30,9 @@
 
 # Debug files
 *.dSYM/
+
+# SBT stuff
+target/
+
+# Editor junk
+*~
