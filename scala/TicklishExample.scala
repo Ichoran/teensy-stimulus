@@ -53,7 +53,7 @@ object TicklishExample {
     val timing = tkh.run()
     println
     println(f"Now running; computer and Ticklish board synced.")
-    println(f"  Max error estimated as ${timing.window.get(temporal.ChronoUnit.MICROS)} us")
+    println(f"  Max error estimated as ${timing.window.get(temporal.ChronoUnit.NANOS)/1000} us")
     println
     println(f"Check out the lights for a bit!  We'll wait.")
     Thread.sleep(7000)
@@ -68,9 +68,15 @@ object TicklishExample {
     println(f"  And it was actually ${ourerror.toString.drop(2)}")
     println
     println("Okay, let's wait until we're done.")
-    while (!tkh.isDone) {
+    var count = 0
+    while (tkh.isRun) {
       println("  Not yet!")
       Thread.sleep(2000)
+      count += 1
+      if (count*2000000L > partOne.duration + partTwo.duration) {
+        println("    Um...we didn't stop???  Aborting.")
+        tkh.clear()
+      }
     }
     println("Done!")
     println

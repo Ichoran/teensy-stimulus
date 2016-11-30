@@ -84,7 +84,7 @@ class Ticklish private[ticklish] (val portname: String) {
     }
   }
 
-  def write(s: String) { 
+  def write(s: String) {
     if (!isConnected) throw new Exception("Cannot write to a closed port.")
     port.writeString(s)
   }
@@ -106,7 +106,7 @@ class Ticklish private[ticklish] (val portname: String) {
 
   def clear() { write("~."); ping }
 
-  def isError(): Boolean = try { state != TicklishState.Errored } catch { case t if NonFatal(t) => true }
+  def isError(): Boolean = try { state == TicklishState.Errored } catch { case t if NonFatal(t) => true }
   def isProg(): Boolean  = try { state == TicklishState.Program } catch { case t if NonFatal(t) => false }
   def isRun(): Boolean   = try { state == TicklishState.Running } catch { case t if NonFatal(t) => false }
   def isDone(): Boolean  = try { state == TicklishState.AllDone } catch { case t if NonFatal(t) => false }
@@ -134,7 +134,7 @@ class Ticklish private[ticklish] (val portname: String) {
   def set(channel: Char, dtl: Ticklish.Digital) { set(channel, dtl, false) }
 
   def set(channel: Char, dtls: Seq[Ticklish.Digital]) { 
-    for { (dtl, i) <- dtls.zipWithIndex } set(channel, dtl, i == 0)
+    for { (dtl, i) <- dtls.zipWithIndex } set(channel, dtl, i != 0)
   }
 
   def set(chdts: Seq[(Char, Ticklish.Digital)]) { 
@@ -271,16 +271,18 @@ object Ticklish {
       f"$durationCommand $delayCommand $blockhighCommand $blocklowCommand $pulsehighCommand $pulselowCommand $uprightCommand"
   }
   object Digital {
+    private[this] final val MaxTime = 99999999000000L
     def apply(delay: Double, interval: Double, high: Double, count: Int): Option[Digital] = {
       val delayus = math.rint(delay*1e6).toLong
       val intervalus = math.rint(interval*1e6).toLong
       val highus = math.rint(high*1e6).toLong
       val totalus = delayus + (if (count > 0) highus + intervalus*(count - 1) else 0)
       if (delay.isNaN || interval.isNaN || high.isNaN) None
-      else if (delayus < 0 || delayus > 99999999000000L) None
-      else if (intervalus < 2 || intervalus > 99999999000000L) None
+      else if (delayus < 0 || delayus > MaxTime) None
+      else if (intervalus < 2 || intervalus > MaxTime) None
       else if (highus < 1 || highus >= intervalus || intervalus/(intervalus-highus) >= 1000000) None
       else if (count < 0 || (count == 0 && delayus == 0)) None
+      else if (totalus > MaxTime) None
       else Some(new Digital(totalus, delayus, highus, intervalus - highus, highus, intervalus - highus))
     }
     def apply(delay: Double, interval: Double, count: Int, pulseinterval: Double, pulsehigh: Double, pulsecount: Int): Option[Digital] = {
@@ -291,13 +293,14 @@ object Ticklish {
       val hus = phus + (pulsecount - 1)*pintus
       val totalus = dus + (if (count > 0) hus + intus*(count - 1) else 0)
       if (delay.isNaN || interval.isNaN || pulseinterval.isNaN || pulsehigh.isNaN) None
-      else if (dus < 0 || dus > 99999999000000L) None
-      else if (intus < 2 || intus > 99999999000000L) None
+      else if (dus < 0 || dus > MaxTime) None
+      else if (intus < 2 || intus > MaxTime) None
       else if (hus < 1 || hus >= intus || intus/(intus-hus) >= 1000000) None
       else if (count < 0 || (count == 0 && dus == 0)) None
-      else if (pintus < 2 || pintus > 99999999000000L) None
+      else if (pintus < 2 || pintus > MaxTime) None
       else if (phus < 1 || phus >= pintus || phus/(intus-phus) >= 1000000) None
       else if (count > 0 && pulsecount < 1) None
+      else if (totalus > MaxTime) None
       else Some(new Digital(totalus, dus, hus, intus - hus, phus, pintus - phus))
     }
   }
