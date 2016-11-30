@@ -55,6 +55,7 @@ object TicklishUtil {
         else hasDot = true
       }
       else if (!('0' <= c && c <= '9')) return false
+      i += 1
     }
     true
   }  

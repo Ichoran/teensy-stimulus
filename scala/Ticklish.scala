@@ -2,7 +2,10 @@ package lab.kerrr.ticklish
 
 import java.time._
 import java.nio.ByteBuffer
+
+import scala.util._
 import scala.util.control.NonFatal
+
 import jssc._
 
 class Ticklish private[ticklish] (val portname: String) {
@@ -10,17 +13,23 @@ class Ticklish private[ticklish] (val portname: String) {
   private var myID: String = null
   private val received = new java.util.concurrent.LinkedBlockingDeque[ByteBuffer]
   private var patience = 500
-  private val patienceUnit = java.util.concurrent.TimeUnit.MILLISECONDS
+  private val patienceUnit = java.util.concurrent.TimeUnit.MILLISECONDS  // DO NOT change this!  `readBytes` is always milliseconds!
 
   def isConnected: Boolean = port ne null
 
   def connect() {
     if (!isConnected) {
       port = new SerialPort(portname)
+      port.openPort ||
+        (throw new Exception(f"Could not open port $portname"))
+      port.setParams(SerialPort.BAUDRATE_115200, SerialPort.DATABITS_8, SerialPort.STOPBITS_1, SerialPort.PARITY_NONE) ||
+        (throw new Exception(f"Could not set parameters for port $portname"))
+      port.setFlowControlMode(SerialPort.FLOWCONTROL_NONE) || 
+        (throw new Exception(f"Could not set flow control for $portname"))
       port.addEventListener(
         new SerialPortEventListener {
           def serialEvent(e: SerialPortEvent) {
-            if (e.getEventType == SerialPortEvent.RXCHAR) received.add(ByteBuffer wrap port.readBytes(e.getEventValue))
+            if (e.getEventType == SerialPortEvent.RXCHAR) received.add(ByteBuffer wrap port.readBytes(e.getEventValue, patience))
           }
         }
       )
@@ -95,18 +104,21 @@ class Ticklish private[ticklish] (val portname: String) {
 
   def ping(): Boolean = try{ flexQuery("~'") == ""; true } catch { case t if NonFatal(t) => false }
 
+  def clear() { write("~."); ping }
+
   def isError(): Boolean = try { state != TicklishState.Errored } catch { case t if NonFatal(t) => true }
   def isProg(): Boolean  = try { state == TicklishState.Program } catch { case t if NonFatal(t) => false }
   def isRun(): Boolean   = try { state == TicklishState.Running } catch { case t if NonFatal(t) => false }
   def isDone(): Boolean  = try { state == TicklishState.AllDone } catch { case t if NonFatal(t) => false }
 
-  def timesync(): (LocalDateTime, Duration) = {
+  def timesync(): Ticklish.Timed = {
     val before = LocalDateTime.now
+    val t0 = System.nanoTime
     val ans = flexQuery("~#")
-    val after = LocalDateTime.now
+    val t1 = System.nanoTime
     if (!TicklishUtil.isTimeReport(ans)) throw new Exception(f"Run error instead of timing info: $ans")
     val current = TicklishUtil.decodeTime(ans)
-    (before minus current, Duration.between(before, after))
+    Ticklish.Timed(before minus current, Duration.ofNanos(t1 - t0), t0, current)
   }
 
   def set(channel: Char, dtl: Ticklish.Digital, fresh: Boolean) {
@@ -115,7 +127,7 @@ class Ticklish private[ticklish] (val portname: String) {
       write(f"~$channel&");
       if (!ping) throw new Exception(f"Failed to add block to $channel")
     }
-    write(f"~$channel=${dtl.command}")
+    write(f"~$channel${dtl.command}")
     if (!ping) throw new Exception(f"Failed to set channel $channel")
   }
 
@@ -133,7 +145,7 @@ class Ticklish private[ticklish] (val portname: String) {
     for { (c, dts) <- chdtss } set(c, dts)
   }
 
-  def run(): (LocalDateTime, Duration) = {
+  def run(): Ticklish.Timed = {
     state match {
       case TicklishState.AllDone =>
         write("~\"")
@@ -149,6 +161,30 @@ class Ticklish private[ticklish] (val portname: String) {
   override def finalize() { try { disconnect() } catch { case t if NonFatal(t) => } }
 }
 object Ticklish {
+  private def managedOpening[U](portname: String)(f: Ticklish => U): Try[Ticklish] =
+    Try{ new Ticklish(portname) }.
+      map{ t =>
+        t.connect()
+        val correct = try { t.isTicklish } catch { case e if NonFatal(e) => try{ t.disconnect() } catch { case x if NonFatal(x) => }; throw e }
+        if (!correct) throw new Exception(f"Port $portname was not Ticklish")
+        try { f(t) } catch { case e if NonFatal(e) => try { t.disconnect() } catch { case x if NonFatal(x) => }; throw e }
+        t
+      }
+
+  def possibilities: Vector[String] = SerialPortList.getPortNames.toVector
+
+  def openFirstWorking: Option[Ticklish] =
+    possibilities.iterator.map(name => managedOpening(name)(identity)).collectFirst{ case Success(x) => x }
+
+  def openAllWorking: Vector[Ticklish] =
+    possibilities.iterator.flatMap(name => managedOpening(name)(identity).toOption).toVector
+
+  def apply(portname: String): Try[Ticklish] = managedOpening(portname)(identity)
+
+  def unsafeCreateClosed(portname: String): Ticklish = new Ticklish(portname)
+
+  case class Timed(zero: LocalDateTime, window: Duration, stamp: Long, tickledAt: Duration) {}
+
   class Digital private[ticklish](
     val duration: Long,
     val delay: Long,

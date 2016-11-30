@@ -305,7 +305,7 @@ Possible states:
 Suppose we wish to open a valve for 10s after 1500s.  We can set this protocol to run on the first channel as follows:
 
 ```
-~A=00001510;00001500;00000010;0000001;00000010;0000001u
+~A=00001510;00001500;00000010;00000001;00000010;00000001u
 ```
 
 Note that the stimulus and pulse times are set to be the same for simplicity, and the off times for each do not really matter as the entire protocol will end then.
