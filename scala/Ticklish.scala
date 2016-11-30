@@ -283,12 +283,12 @@ object Ticklish {
       else if (count < 0 || (count == 0 && delayus == 0)) None
       else Some(new Digital(totalus, delayus, highus, intervalus - highus, highus, intervalus - highus))
     }
-    def blocked(delay: Double, interval: Double, count: Int, pulseinterval: Double, pulsehigh: Double, pulsecount: Int): Option[Digital] = {
+    def apply(delay: Double, interval: Double, count: Int, pulseinterval: Double, pulsehigh: Double, pulsecount: Int): Option[Digital] = {
       val dus = math.rint(delay*1e6).toLong
       val intus = math.rint(interval*1e6).toLong
       val pintus = math.rint(pulseinterval*1e6).toLong
       val phus = math.rint(pulsehigh*1e6).toLong
-      val hus = phus + pulsecount*pintus
+      val hus = phus + (pulsecount - 1)*pintus
       val totalus = dus + (if (count > 0) hus + intus*(count - 1) else 0)
       if (delay.isNaN || interval.isNaN || pulseinterval.isNaN || pulsehigh.isNaN) None
       else if (dus < 0 || dus > 99999999000000L) None

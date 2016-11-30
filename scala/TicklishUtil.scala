@@ -40,7 +40,7 @@ object TicklishUtil {
 
   def encodeName(name: String): String = f"IDENTITY$name"
   def decodeName(s: String): String =
-    if (isTicklish(s)) s drop 8
+    if (isTicklish(s)) s drop 12
     else throw new IllegalArgumentException("Unknown device type")
 
   def isTicklish(s: String): Boolean = s.startsWith("Ticklish1.0 ")
