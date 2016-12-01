@@ -118,6 +118,7 @@ class Ticklish private[ticklish] (val portname: String) {
     val t1 = System.nanoTime
     if (!TicklishUtil.isTimeReport(ans)) throw new Exception(f"Run error instead of timing info: $ans")
     val current = TicklishUtil.decodeTime(ans)
+    val delta = (if (t1 == t0) 5000000 else t1 - t0)   // If they appear the same, recklessly guess ~5 ms difference
     Ticklish.Timed(before minus current, Duration.ofNanos(t1 - t0), t0, current)
   }
 
