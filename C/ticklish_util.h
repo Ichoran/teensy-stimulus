@@ -3,7 +3,7 @@
 #ifndef KERRR_TICKLISH_UTIL
 #define KERRR_TICKLISH_UTIL
 
-#include <libserialport.h>
+#include <stdbool.h>
 #include <sys/time.h>
 
 #define TKH_RUNNING 2
@@ -30,7 +30,7 @@ char* tkh_encode_name(const char *s);
 char* tkh_decode_name(const char *s);
 
 
-int tkh_is_ticklish(const char *s);
-int tkh_is_time_report(const char *s);
+bool tkh_string_is_ticklish(const char *s);
+bool tkh_string_is_time_report(const char *s);
 
 #endif

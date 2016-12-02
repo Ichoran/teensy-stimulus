@@ -122,7 +122,7 @@ class Ticklish private[ticklish] (val portname: String) {
     Ticklish.Timed(before minus current, Duration.ofNanos(t1 - t0), t0, current)
   }
 
-  def set(channel: Char, dtl: Ticklish.Digital, fresh: Boolean) {
+  def set(channel: Char, dtl: Ticklish.Digital, following: Boolean) {
     if (channel < 'A' || channel > 'X') throw new Exception(f"Invalid channel: $channel")
     if (fresh) {
       write(f"~$channel&");

@@ -36,7 +36,7 @@ char* tkh_encode_time(const struct timeval *tv) {
 
 struct timeval tkh_decode_time(const char *s) {
     struct timeval tv = {0, -1};   // Error by default
-    if (!tkh_is_time_report) return tv;
+    if (!tkh_string_is_time_report(s)) return tv;
     errno = 0;
     double t = strtod(s, NULL);
     tv.tv_sec = (int)floor(t);
@@ -79,16 +79,16 @@ char* tkh_encode_name(const char *s) {
 }
 
 char* tkh_decode_name(const char *s) {
-    if (!tkh_is_ticklish) return NULL;
+    if (!tkh_string_is_ticklish(s)) return NULL;
     else return strndup(s+12, 51);
 }
 
 
-int tkh_is_ticklish(const char *s) {
+bool tkh_string_is_ticklish(const char *s) {
     return strncmp(s, "Ticklish1.0 ", 12) == 0;
 }
 
-int tkh_is_time_report(const char *s) {
+bool tkh_string_is_time_report(const char *s) {
     if (!s[8] == '.') return 0;
     for (int i = 0; i<15; i++) {
         if (i != 8) {
