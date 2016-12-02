@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "ticklish_util.h"
 
@@ -27,13 +28,21 @@ char* tkh_encode_time(const struct timeval *tv) {
         return strdup(buffer);
     }
     else {
-        snprintf(buffer, 63, "0%d.%06d", tv->tv_sec, tv->tv_usec);
+        snprintf(buffer, 63, "0%ld.%06ld", tv->tv_sec, tv->tv_usec);
         if (buffer[8] == '.') return strndup(buffer, 8);
         else return strndup(buffer + 1, 8);
     }
 }
 
-struct timeval tkh_decode_time(const char *s);
+struct timeval tkh_decode_time(const char *s) {
+    struct timeval tv = {0, -1};   // Error by default
+    if (!tkh_is_time_report) return tv;
+    errno = 0;
+    double t = strtod(s, NULL);
+    tv.tv_sec = (int)floor(t);
+    tv.tv_usec = (int)rint((t - floor(t))*10000000);
+    return tv;
+}
 
 
 
@@ -61,8 +70,30 @@ int tkh_decode_state(const char *s) {
     return tkh_char_to_state(*s);
 }
 
-char* tkh_encode_name(const char *s);
-char* tkh_decode_name(const char *s);
+char* tkh_encode_name(const char *s) {
+    size_t n = strnlen(s, 53);
+    char* name = malloc(11+n);
+    snprintf(name, 11+n, "$IDENTITY%s\n", s);
+    name[n+10] = 0;  // In case snprintf impl doesn't leave a null on the end
+    return name;
+}
 
-int tkh_is_ticklish(const char *s);
-int tkh_is_time_report(const char *s);
+char* tkh_decode_name(const char *s) {
+    if (!tkh_is_ticklish) return NULL;
+    else return strndup(s+12, 51);
+}
+
+
+int tkh_is_ticklish(const char *s) {
+    return strncmp(s, "Ticklish1.0 ", 12) == 0;
+}
+
+int tkh_is_time_report(const char *s) {
+    if (!s[8] == '.') return 0;
+    for (int i = 0; i<15; i++) {
+        if (i != 8) {
+            if (!isdigit(s[i])) return 0;
+        }
+    }
+    return (s[15] == 0); 
+}
