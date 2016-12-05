@@ -15,8 +15,23 @@ bool tkh_timed_is_valid(TkhTimed *tkh) {
         tkh_timeval_is_valid(&(tkh->zero)) && 
         tkh_timeval_is_valid(&(tkh->window)) &&
         tkh_timeval_is_valid(&(tkh->timestamp)) &&
-        tkh_timeval_is_valid(&(tkh->tickled_at));
+        tkh_timeval_is_valid(&(tkh->board_at));
 }
+
+char* tkh_timed_to_string(TkhTimed *tkh) {
+    char buffer[144];
+    snprintf(
+        buffer, 144,
+        "%ld.%06ld + <= %ld.%06ld; here %ld.%06ld, there %ld.%06ld",
+        tkh->zero.tv_sec, tkh->zero.tv_usec,
+        tkh->window.tv_sec, tkh->window.tv_usec,
+        tkh->timestamp.tv_sec, tkh->timestamp.tv_usec,
+        tkh->board_at.tv_sec, tkh->board_at.tv_usec
+    );
+    buffer[143] = 0;
+    return strdup(buffer);
+}
+
 
 bool tkh_digital_is_valid(TkhDigital *tkh) {
     return 
@@ -26,7 +41,6 @@ bool tkh_digital_is_valid(TkhDigital *tkh) {
         tkh->block_high <= TKH_MAX_TIME_MICROS && tkh->block_low <= TKH_MAX_TIME_MICROS &&
         tkh->pulse_high <= TKH_MAX_TIME_MICROS && tkh->pulse_low <= TKH_MAX_TIME_MICROS;
 }
-
 
 TkhDigital tkh_simple_digital(char channel, double delay, double interval, double high, unsigned int count) {
     TkhDigital result;
@@ -69,6 +83,19 @@ TkhDigital tkh_pulsed_digital(char channel, double delay, double interval, unsig
     if (!tkh_digital_is_valid(&result)) result.duration = -1;
     return result;
 }
+
+/*
+char* tkh_digital_to_string(Ticklish *tkh, bool command) {
+    char buffer[80];
+    char temp[60];
+    snprintf(
+        buffer, 143,
+        (command) ?
+          ""
+    );
+    return strdup(buffer);
+}
+*/
 
 bool tkh_is_connected(Ticklish *tkh) {
     tkh->my_port != NULL;

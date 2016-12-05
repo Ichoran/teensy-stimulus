@@ -17,9 +17,13 @@ static inline bool tkh_timeval_is_valid(const struct timeval *tv) { return tv->t
 
 /** We recklessly reuse timeval to store durations (not time-since-epoch) */
 char* tkh_encode_time(const struct timeval *tv);
+int tkh_encode_time_into(const struct timeval *tv, char* target, int max_length);
 
 /** We recklessly reuse timeval to store durations (not time-since-epoch) */
 struct timeval tkh_decode_time(const char *s);
+
+struct timeval tkh_timeval_from_micros(long long micros);
+long long tkh_micros_from_timeval(const struct timeval *tv);
 
 
 float tkh_decode_voltage(const char *s);

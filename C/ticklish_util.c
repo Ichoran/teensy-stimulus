@@ -20,19 +20,35 @@ int tkh_char_to_state(char c) {
 
 
 char* tkh_encode_time(const struct timeval *tv) {
-    char buffer[64];
-    buffer[63] = 0;  // Just in case any string impl fails to leave a terminating zero
-    if (tv->tv_sec >= 99999999) return strdup("99999999");
-    else if (tv->tv_sec == 0) {
-        snprintf(buffer, 63, "%.6f", tv->tv_usec*1e-6);
-        return strdup(buffer);
-    }
-    else {
-        snprintf(buffer, 63, "0%ld.%06ld", tv->tv_sec, tv->tv_usec);
-        if (buffer[8] == '.') return strndup(buffer, 8);
-        else return strndup(buffer + 1, 8);
-    }
+    char buffer[32];
+    tkh_encode_time_into(tv, buffer, 32);
+    buffer[31] = 0;  // Just in case any string impl fails to leave a terminating zero
+    strdup(buffer);
 }
+
+int tkh_encode_time_into(const struct timeval *tv, char* target, int max_length) {
+    if (max_length < 8) return -1;
+    if (tv->tv_sec >= 99999999) { memset(target, '9', 8); }
+    else {
+        char buffer[32];
+        if (tv->tv_sec == 0) { 
+            snprintf(buffer, max_length, "%.6f", tv->tv_usec*1e-6);
+            memcpy(target, buffer, 8);
+        }
+        else {
+            char buffer[32];
+            snprintf(buffer, 32, "%ld.%06ld", tv->tv_sec, tv->tv_usec);
+            if (buffer[7] == '.') {
+                memcpy(target+1, buffer, 7);
+                *target = '0';
+            }
+            else memcpy(target, buffer, 8);
+        }
+    }
+    if (max_length > 8) target[8] = 0;
+    return 8;
+}
+
 
 struct timeval tkh_decode_time(const char *s) {
     struct timeval tv = {0, -1};   // Error by default
@@ -42,6 +58,20 @@ struct timeval tkh_decode_time(const char *s) {
     tv.tv_sec = (int)floor(t);
     tv.tv_usec = (int)rint((t - floor(t))*10000000);
     return tv;
+}
+
+struct timeval tkh_timeval_from_micros(long long micros) {
+    struct timeval tv = {0, -1};
+    if (micros < 0 || micros > 2000000000000000ll) return tv;
+    tv.tv_sec = micros / 1000000;
+    tv.tv_usec = micros - tv.tv_sec*1000000;
+    return tv;
+}
+
+
+long long tkh_micros_from_timeval(const struct timeval *tv) {
+    if (tv->tv_usec < 0) return -1;
+    else return ((long long)tv->tv_sec)*1000000 + tv->tv_usec;
 }
 
 
