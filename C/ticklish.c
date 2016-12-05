@@ -84,18 +84,26 @@ TkhDigital tkh_pulsed_digital(char channel, double delay, double interval, unsig
     return result;
 }
 
-/*
-char* tkh_digital_to_string(Ticklish *tkh, bool command) {
+char* tkh_digital_to_string(TkhDigital *tdg, bool command) {
     char buffer[80];
-    char temp[60];
-    snprintf(
-        buffer, 143,
+    int stride = (command) ? 9 : 10;
+    strcpy(
+        buffer,
         (command) ?
-          ""
+            "t12345678 d12345678 y12345678 n12345678 p12345678 q12345678 _" :
+            "=12345678;12345678;12345678;12345678;12345678;12345678_"
     );
+    buffer[79] = 0;  // Make sure we stop even if we messed up the strings above
+    struct timeval tv;
+    tv = tkh_timeval_from_micros(tdg->duration);   tkh_encode_time_into(&tv, buffer + 1 + 0*stride, 8);
+    tv = tkh_timeval_from_micros(tdg->delay);      tkh_encode_time_into(&tv, buffer + 1 + 1*stride, 8);
+    tv = tkh_timeval_from_micros(tdg->block_high); tkh_encode_time_into(&tv, buffer + 1 + 2*stride, 8);
+    tv = tkh_timeval_from_micros(tdg->block_low);  tkh_encode_time_into(&tv, buffer + 1 + 3*stride, 8);
+    tv = tkh_timeval_from_micros(tdg->pulse_high); tkh_encode_time_into(&tv, buffer + 1 + 4*stride, 8);
+    tv = tkh_timeval_from_micros(tdg->pulse_low);  tkh_encode_time_into(&tv, buffer + 1 + 5*stride, 8);
+    buffer[6*stride] = (tdg->upright) ? 'u' : 'i';
     return strdup(buffer);
 }
-*/
 
 bool tkh_is_connected(Ticklish *tkh) {
     tkh->my_port != NULL;

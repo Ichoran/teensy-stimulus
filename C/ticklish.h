@@ -20,6 +20,10 @@ typedef struct TkhTimed {
 
 bool tkh_timed_is_valid(TkhTimed *tkh);
 
+char* tkh_timed_to_string(TkhTimed *tkh);
+
+
+
 typedef struct TkhDigital {
     char channel;   // Unlike Scala interface, we store the channel in here!
     long long duration;
@@ -36,6 +40,10 @@ bool tkh_digital_is_valid(TkhDigital *tkh);
 TkhDigital tkh_simple_digital(char channel, double delay, double interval, double high, unsigned int count);
 
 TkhDigital tkh_pulsed_digital(char channel, double delay, double interval, unsigned int count, double pulse_interval, double pulse_high, unsigned int pulse_count);
+
+char* tkh_digital_to_string(TkhDigital *tdg, bool command);
+
+
 
 #define TICKLISH_PATIENCE 500
 
