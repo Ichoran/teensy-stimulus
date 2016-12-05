@@ -46,22 +46,30 @@ char* tkh_digital_to_string(TkhDigital *tdg, bool command);
 
 
 #define TICKLISH_PATIENCE 500
+#define TICKLISH_BUFFER_N 256
 
 typedef struct Ticklish {
+    // This stuff should be immutable (set once at creation)
     char* portname;
-
     struct sp_port *my_port;
-    char* my_id;
 
     pthread_mutex_t my_mutex;  // Want to set = PTHREAD_MUTEX_INITIALIZER;
-    char* buffer;
-    int buffer_start;
-    int buffer_end;
 
-    int patience;
+    // This stuff is mutable and the above mutex should be locked before any of this is altered
+    volatile char* my_id;
 
-    int error_value;
+    volatile char* buffer;
+    volatile int buffer_start;
+    volatile int buffer_end;
+
+    volatile int patience;
+
+    volatile int error_value;
 } Ticklish;
+
+Ticklish* tkh_construct(struct sp_port* port);
+
+void tkh_destruct(Ticklish *tkh);
 
 bool tkh_is_connected(Ticklish *tkh);
 
@@ -100,6 +108,6 @@ TkhTimed tkh_timesync(Ticklish *tkh);
 
 void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n);
 
-TkhTimed tkh_run();
+TkhTimed tkh_run(Ticklish *tkh);
 
 #endif

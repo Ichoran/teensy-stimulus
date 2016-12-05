@@ -105,6 +105,83 @@ char* tkh_digital_to_string(TkhDigital *tdg, bool command) {
     return strdup(buffer);
 }
 
-bool tkh_is_connected(Ticklish *tkh) {
-    tkh->my_port != NULL;
+
+Ticklish* tkh_construct(struct sp_port* port) {
+    Ticklish *tv = (Ticklish*)malloc(sizeof(Ticklish));
+    tv->my_port = port;
+    tv->portname = strdup(sp_get_port_name(tv->my_port));
+    tv->my_port = NULL;
+    tv->my_id = NULL;
+    tv->buffer = NULL;
+    tv->buffer_start = 0;
+    tv->buffer_end = 0;
+    tv->patience = 0;
+    tv->error_value = 0;
+    pthread_mutexattr_t pmat;
+    pthread_mutexattr_init(&pmat);
+    pthread_mutexattr_settype(&pmat, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&(tv->my_mutex), &pmat);
+    pthread_mutexattr_destroy(&pmat);  // Contract is contents are COPIED.  Thus, we can destroy it now!
+    return tv;
 }
+
+void tkh_destruct(Ticklish *tkh) {
+    if (tkh->portname != NULL) {
+        pthread_mutex_lock(&(tkh->my_mutex));
+        tkh_disconnect(tkh);
+        if (tkh->my_port != NULL) { sp_free_port((struct sp_port*)tkh->my_port); tkh->my_port = NULL; }
+        if (tkh->my_id != NULL) { free((void*)tkh->my_id); tkh->my_id = NULL; }
+        if (tkh->buffer != NULL) { free((void*)tkh->buffer); tkh->buffer = NULL; }
+        if (tkh->portname != NULL) { free((void*)tkh->portname); tkh->portname = NULL; }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+        pthread_mutex_destroy(&(tkh->my_mutex));
+    }
+}
+
+
+bool tkh_is_connected(Ticklish *tkh) {
+    tkh->buffer != NULL;
+}
+
+
+void tkh_connect(Ticklish *tkh) {
+    if (!tkh_is_connected(tkh)) {
+        pthread_mutex_lock(&(tkh->my_mutex));
+        if (tkh->my_port != NULL && tkh->buffer == NULL) {
+            sp_set_bits(tkh->my_port, 8);
+            sp_set_parity(tkh->my_port, SP_PARITY_NONE);
+            sp_set_stopbits(tkh->my_port, 1);
+            sp_set_baudrate(tkh->my_port, 115200);
+            enum sp_return sp_ok = sp_open(tkh->my_port, SP_MODE_READ + SP_MODE_WRITE);
+            if (sp_ok == SP_OK) {
+                tkh->buffer = (char*)malloc(TICKLISH_BUFFER_N);
+                tkh->buffer_start = 0;
+                tkh->buffer_end = 0;
+                tkh->error_value = 0;
+                tkh->patience = -1;                
+            }
+            else tkh->error_value = 1;
+        }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+    }
+}
+
+void tkh_disconnect(Ticklish *tkh) {
+    if (tkh_is_connected(tkh)) {
+        pthread_mutex_lock(&(tkh->my_mutex));
+        if (tkh->buffer != NULL && tkh->my_port != NULL) {
+            enum sp_return sp_ok = sp_close(tkh->my_port);
+            if (sp_ok == SP_OK) {
+                free((void*)(tkh->buffer));
+                tkh->buffer = NULL;
+                tkh->buffer_start = 0;
+                tkh->buffer_end = 0;
+                tkh->error_value = 0;
+                tkh->patience = -1;
+            }
+            else tkh->error_value = 1;
+        }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+    }
+}
+
