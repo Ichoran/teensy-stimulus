@@ -124,7 +124,7 @@ class Ticklish private[ticklish] (val portname: String) {
 
   def set(channel: Char, dtl: Ticklish.Digital, following: Boolean) {
     if (channel < 'A' || channel > 'X') throw new Exception(f"Invalid channel: $channel")
-    if (fresh) {
+    if (following) {
       write(f"~$channel&");
       if (!ping) throw new Exception(f"Failed to add block to $channel")
     }
@@ -184,7 +184,7 @@ object Ticklish {
 
   def unsafeCreateClosed(portname: String): Ticklish = new Ticklish(portname)
 
-  case class Timed(zero: LocalDateTime, window: Duration, stamp: Long, tickledAt: Duration) {}
+  case class Timed(zero: LocalDateTime, window: Duration, stamp: Long, boardAt: Duration) {}
 
   class Digital private[ticklish](
     val duration: Long,

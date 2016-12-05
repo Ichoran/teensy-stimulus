@@ -58,8 +58,8 @@ object TicklishExample {
     println(f"Check out the lights for a bit!  We'll wait.")
     Thread.sleep(7000)
     val newtiming = tkh.timesync()
-    val expected = timing.tickledAt plus Duration.ofNanos(newtiming.stamp - timing.stamp)
-    val actual = newtiming.tickledAt
+    val expected = timing.boardAt plus Duration.ofNanos(newtiming.stamp - timing.stamp)
+    val actual = newtiming.boardAt
     val maxerror = timing.window plus newtiming.window
     val ourerror = if (actual.compareTo(expected) < 0) expected minus actual else actual minus expected
     println(f"Okay, we expect to be ${expected.toString.drop(2)} into the protocol now.")

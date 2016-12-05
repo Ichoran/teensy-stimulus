@@ -13,6 +13,7 @@
 
 int tkh_char_to_state(char c);
 
+static inline bool tkh_timeval_is_valid(const struct timeval *tv) { return tv->tv_usec >= 0; }
 
 /** We recklessly reuse timeval to store durations (not time-since-epoch) */
 char* tkh_encode_time(const struct timeval *tv);
