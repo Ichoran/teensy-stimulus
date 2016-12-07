@@ -152,7 +152,7 @@ void tkh_connect(Ticklish *tkh) {
             sp_set_parity(tkh->my_port, SP_PARITY_NONE);
             sp_set_stopbits(tkh->my_port, 1);
             sp_set_baudrate(tkh->my_port, 115200);
-            enum sp_return sp_ok = sp_open(tkh->my_port, SP_MODE_READ + SP_MODE_WRITE);
+            enum sp_return sp_ok = sp_open(tkh->my_port, SP_MODE_READ_WRITE);
             if (sp_ok == SP_OK) {
                 tkh->buffer = (char*)malloc(TICKLISH_BUFFER_N);
                 tkh->buffer_start = 0;
@@ -183,5 +183,144 @@ void tkh_disconnect(Ticklish *tkh) {
         }
         pthread_mutex_unlock(&(tkh->my_mutex));
     }
+}
+
+int tkh_wait_for_next_buffer(Ticklish *tkh) {
+    char buffer[128];
+    int N = TICKLISH_BUFFER_N - (tkh->buffer_end - tkh->buffer_start);
+    if (N > 128) N = 128;
+    if (N <= 0) return -1;
+    enum sp_return ret = sp_blocking_read_next(tkh->my_port, buffer, N, tkh->patience);
+    if (ret <= 0) return -1;
+    else {
+        int n = (ret >= 128) ? 128 : ret;
+        pthread_mutex_lock(&(tkh->my_mutex));
+        if (n < TICKLISH_BUFFER_N - tkh->buffer_end) {
+            memcpy((void*)(tkh->buffer + tkh->buffer_end), buffer, n);
+            tkh->buffer_end += n;
+            n = 0;
+        }
+        else {
+            if (tkh->buffer_start > 0) {            
+                memmove((void*)(tkh->buffer + tkh->buffer_start), (void*)tkh->buffer, tkh->buffer_end - tkh->buffer_start);
+                tkh->buffer_end -= tkh->buffer_start;
+                tkh->buffer_start = 0;
+            }
+            int m = TICKLISH_BUFFER_N - tkh->buffer_end;
+            if (n < m) m = n;
+            memcpy((void*)(tkh->buffer + tkh->buffer_end), buffer, m);
+            tkh->buffer_end += m;
+            n -= m;
+        }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+        return n;
+    }
+}
+
+
+char* thk_fixed_read(Ticklish *tkh, int n, bool twiddled) {
+    if (tkh->buffer == NULL || n <= 0) return NULL;
+    char* buffer = (char*)malloc(n+1);
+    int i = 0;
+    int ret = 0;
+    do {
+        pthread_mutex_lock(&(tkh->my_mutex));
+        while (!twiddled && tkh->buffer_start < tkh->buffer_end) { 
+            twiddled = tkh->buffer[tkh->buffer_start] == '~';
+            tkh->buffer_start++;
+        }
+        if (tkh->buffer_end - tkh->buffer_start >= n - i) {
+            memcpy(buffer + i, tkh->buffer + tkh->buffer_start, n - i);
+            tkh->buffer_start += n - i;
+            i = n;
+        }
+        else if (tkh->buffer_end > tkh->buffer_start) {
+            memcpy(buffer + i, tkh->buffer + tkh->buffer_start, tkh->buffer_end - tkh->buffer_start);
+            i += tkh->buffer_end - tkh->buffer_start;
+            tkh->buffer_start = tkh->buffer_end = 0;
+        }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+        if (i < n) ret = tkh_wait_for_next_buffer(tkh);
+    } until (i == n || ret != 0);
+    if (ret != 0) {
+        free((void*)buffer);
+        return NULL;
+    }
+    else {
+        buffer[n] = 0;
+        return buffer;
+    }
+}
+
+
+char* thk_flex_read(Ticklish *tkh, bool dollared) {
+    if (tkh->buffer == NULL) return NULL;
+    char* buffer = (char*)malloc(64);
+    int N = 64;
+    int i = 0;
+    bool mistake = false;
+    bool newlined = false;
+    do {
+        pthread_mutex_lock(&(tkh->my_mutex));
+        while (!dollared && tkh->buffer_start < tkh->buffer_end) { 
+            twiddled = tkh->buffer[tkh->buffer_start] == '$';
+            tkh->buffer_start++;
+        }
+        while (dollared && tkh->buffer_end > tkh->buffer_start && !newlined) {
+            char c = tkh->buffer[tkh->buffer_start];
+            tkh->buffer_start++;
+            if (c == '\n') newlined = true;
+            else if (c == '~') {
+                tkh->buffer_start--;
+                newlined = true;
+                mistake = true;
+            }
+            else {
+                buffer[i] = c;
+                i++;
+                if (i >= N) {
+                    char* temp = (char*)malloc(N*2);
+                    memcpy(temp, buffer, N);
+                    free((void*)buffer);
+                    buffer = temp;
+                    N *= 2;
+                }
+            }
+        }
+        pthread_mutex_unlock(&(tkh->my_mutex));
+        if (!newlined) ret = tkh_wait_for_next_buffer(tkh);
+    } until (newlined);
+    if (mistake) {
+        free((void*)buffer);
+        return NULL;
+    }
+    else {
+        buffer[n] = 0;
+        return buffer;
+    }
+}
+
+void tkh_write(Ticklish *tkh, const char *s) {
+
+}
+
+
+char* tkh_query(Ticklish *tkh, const char *message, int n) {
+    pthread_mutex_lock(&(tkh->my_mutex));
+    tkh->error_value = 0;
+    pthread_mutex_unlock(&(tkh->my_mutex));
+    tkh_write(tkh, message);
+    if (tkh->error_value) return NULL;
+    return tkh_fixed_read(tkh, n, false);
+}
+
+
+char* tkh_flex_query(Ticklish *tkh, const char *message) {
+    pthread_mutex_lock(&(tkh->my_mutex));
+    tkh->error_value = 0;
+    pthread_mutex_unlock(&(tkh->my_mutex));
+    tkh_write(tkh, message);
+    if (tkh->error_value) return NULL;
+    return tkh_flex_read(tkh, false);
 }
 
