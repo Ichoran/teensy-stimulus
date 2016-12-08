@@ -10,28 +10,52 @@
 #include "ticklish_util.h"
 #include "ticklish.h"
 
-bool tkh_timed_is_valid(TkhTimed *tkh) {
-    return
-        tkh_timeval_is_valid(&(tkh->zero)) && 
-        tkh_timeval_is_valid(&(tkh->window)) &&
-        tkh_timeval_is_valid(&(tkh->timestamp)) &&
-        tkh_timeval_is_valid(&(tkh->board_at));
+#define LOCKON pthread_mutex_lock(&(tkh->my_mutex))
+#define UNLOCK pthread_mutex_unlock(&(tkh->my_mutex))
+
+
+/**********************/
+/* TkhTimed functions */
+/**********************/
+
+void tkh_timed_init(TkhTimed *tkt) {
+    tkt->zero.tv_sec = 0;
+    tkt->zero.tv_usec = -1;
+    tkt->window.tv_sec = 0;
+    tkt->window.tv_usec = -1;
+    tkt->timestamp.tv_sec = 0;
+    tkt->timestamp.tv_usec = -1;
+    tkt->board_at.tv_sec = 0;
+    tkt->board_at.tv_usec = -1;
 }
 
-char* tkh_timed_to_string(TkhTimed *tkh) {
+bool tkh_timed_is_valid(TkhTimed *tkt) {
+    return
+        tkh_timeval_is_valid(&(tkt->zero)) && 
+        tkh_timeval_is_valid(&(tkt->window)) &&
+        tkh_timeval_is_valid(&(tkt->timestamp)) &&
+        tkh_timeval_is_valid(&(tkt->board_at));
+}
+
+char* tkh_timed_to_string(TkhTimed *tkt) {
     char buffer[144];
     snprintf(
         buffer, 144,
         "%ld.%06ld + <= %ld.%06ld; here %ld.%06ld, there %ld.%06ld",
-        tkh->zero.tv_sec, tkh->zero.tv_usec,
-        tkh->window.tv_sec, tkh->window.tv_usec,
-        tkh->timestamp.tv_sec, tkh->timestamp.tv_usec,
-        tkh->board_at.tv_sec, tkh->board_at.tv_usec
+        tkt->zero.tv_sec, tkt->zero.tv_usec,
+        tkt->window.tv_sec, tkt->window.tv_usec,
+        tkt->timestamp.tv_sec, tkt->timestamp.tv_usec,
+        tkt->board_at.tv_sec, tkt->board_at.tv_usec
     );
     buffer[143] = 0;
     return strdup(buffer);
 }
 
+
+
+/************************/
+/* TkhDigital functions */
+/************************/
 
 bool tkh_digital_is_valid(TkhDigital *tkh) {
     return 
@@ -115,7 +139,6 @@ Ticklish* tkh_construct(struct sp_port* port) {
     tv->buffer = NULL;
     tv->buffer_start = 0;
     tv->buffer_end = 0;
-    tv->patience = 0;
     tv->error_value = 0;
     pthread_mutexattr_t pmat;
     pthread_mutexattr_init(&pmat);
@@ -127,13 +150,13 @@ Ticklish* tkh_construct(struct sp_port* port) {
 
 void tkh_destruct(Ticklish *tkh) {
     if (tkh->portname != NULL) {
-        pthread_mutex_lock(&(tkh->my_mutex));
+        LOCKON;
         tkh_disconnect(tkh);
         if (tkh->my_port != NULL) { sp_free_port((struct sp_port*)tkh->my_port); tkh->my_port = NULL; }
         if (tkh->my_id != NULL) { free((void*)tkh->my_id); tkh->my_id = NULL; }
         if (tkh->buffer != NULL) { free((void*)tkh->buffer); tkh->buffer = NULL; }
         if (tkh->portname != NULL) { free((void*)tkh->portname); tkh->portname = NULL; }
-        pthread_mutex_unlock(&(tkh->my_mutex));
+        UNLOCK;
         pthread_mutex_destroy(&(tkh->my_mutex));
     }
 }
@@ -146,7 +169,7 @@ bool tkh_is_connected(Ticklish *tkh) {
 
 void tkh_connect(Ticklish *tkh) {
     if (!tkh_is_connected(tkh)) {
-        pthread_mutex_lock(&(tkh->my_mutex));
+        LOCKON;
         if (tkh->my_port != NULL && tkh->buffer == NULL) {
             sp_set_bits(tkh->my_port, 8);
             sp_set_parity(tkh->my_port, SP_PARITY_NONE);
@@ -157,18 +180,17 @@ void tkh_connect(Ticklish *tkh) {
                 tkh->buffer = (char*)malloc(TICKLISH_BUFFER_N);
                 tkh->buffer_start = 0;
                 tkh->buffer_end = 0;
-                tkh->error_value = 0;
-                tkh->patience = -1;                
+                tkh->error_value = 0;          
             }
             else tkh->error_value = 1;
         }
-        pthread_mutex_unlock(&(tkh->my_mutex));
+        UNLOCK;
     }
 }
 
 void tkh_disconnect(Ticklish *tkh) {
     if (tkh_is_connected(tkh)) {
-        pthread_mutex_lock(&(tkh->my_mutex));
+        LOCKON;
         if (tkh->buffer != NULL && tkh->my_port != NULL) {
             enum sp_return sp_ok = sp_close(tkh->my_port);
             if (sp_ok == SP_OK) {
@@ -177,11 +199,10 @@ void tkh_disconnect(Ticklish *tkh) {
                 tkh->buffer_start = 0;
                 tkh->buffer_end = 0;
                 tkh->error_value = 0;
-                tkh->patience = -1;
             }
             else tkh->error_value = 1;
         }
-        pthread_mutex_unlock(&(tkh->my_mutex));
+        UNLOCK;
     }
 }
 
@@ -190,11 +211,11 @@ int tkh_wait_for_next_buffer(Ticklish *tkh) {
     int N = TICKLISH_BUFFER_N - (tkh->buffer_end - tkh->buffer_start);
     if (N > 128) N = 128;
     if (N <= 0) return -1;
-    enum sp_return ret = sp_blocking_read_next(tkh->my_port, buffer, N, tkh->patience);
+    enum sp_return ret = sp_blocking_read_next(tkh->my_port, buffer, N, TICKLISH_PATIENCE);
     if (ret <= 0) return -1;
     else {
         int n = (ret >= 128) ? 128 : ret;
-        pthread_mutex_lock(&(tkh->my_mutex));
+        ;
         if (n < TICKLISH_BUFFER_N - tkh->buffer_end) {
             memcpy((void*)(tkh->buffer + tkh->buffer_end), buffer, n);
             tkh->buffer_end += n;
@@ -224,24 +245,24 @@ char* thk_fixed_read(Ticklish *tkh, int n, bool twiddled) {
     int i = 0;
     int ret = 0;
     do {
-        pthread_mutex_lock(&(tkh->my_mutex));
+        LOCKON;
         while (!twiddled && tkh->buffer_start < tkh->buffer_end) { 
             twiddled = tkh->buffer[tkh->buffer_start] == '~';
             tkh->buffer_start++;
         }
         if (tkh->buffer_end - tkh->buffer_start >= n - i) {
-            memcpy(buffer + i, tkh->buffer + tkh->buffer_start, n - i);
+            memcpy(buffer + i, (char*)(tkh->buffer + tkh->buffer_start), n - i);
             tkh->buffer_start += n - i;
             i = n;
         }
         else if (tkh->buffer_end > tkh->buffer_start) {
-            memcpy(buffer + i, tkh->buffer + tkh->buffer_start, tkh->buffer_end - tkh->buffer_start);
+            memcpy(buffer + i, (char*)(tkh->buffer + tkh->buffer_start), tkh->buffer_end - tkh->buffer_start);
             i += tkh->buffer_end - tkh->buffer_start;
             tkh->buffer_start = tkh->buffer_end = 0;
         }
-        pthread_mutex_unlock(&(tkh->my_mutex));
+        UNLOCK;
         if (i < n) ret = tkh_wait_for_next_buffer(tkh);
-    } until (i == n || ret != 0);
+    } while (!(i == n || ret != 0));
     if (ret != 0) {
         free((void*)buffer);
         return NULL;
@@ -261,9 +282,9 @@ char* thk_flex_read(Ticklish *tkh, bool dollared) {
     bool mistake = false;
     bool newlined = false;
     do {
-        pthread_mutex_lock(&(tkh->my_mutex));
+        LOCKON;
         while (!dollared && tkh->buffer_start < tkh->buffer_end) { 
-            twiddled = tkh->buffer[tkh->buffer_start] == '$';
+            dollared = tkh->buffer[tkh->buffer_start] == '$';
             tkh->buffer_start++;
         }
         while (dollared && tkh->buffer_end > tkh->buffer_start && !newlined) {
@@ -287,40 +308,221 @@ char* thk_flex_read(Ticklish *tkh, bool dollared) {
                 }
             }
         }
-        pthread_mutex_unlock(&(tkh->my_mutex));
-        if (!newlined) ret = tkh_wait_for_next_buffer(tkh);
-    } until (newlined);
+        UNLOCK;
+        if (!newlined) {
+            int ret = tkh_wait_for_next_buffer(tkh);
+            if (ret < 0) {
+                mistake = true;
+                newlined = true;
+            }
+        }
+    } while (!newlined);
     if (mistake) {
         free((void*)buffer);
         return NULL;
     }
     else {
-        buffer[n] = 0;
+        buffer[i] = 0;
         return buffer;
     }
 }
 
 void tkh_write(Ticklish *tkh, const char *s) {
-
+    LOCKON;
+    tkh->error_value = 0;
+    if (!tkh_is_connected(tkh)) {
+        tkh_connect(tkh);
+    }
+    UNLOCK;
+    if (tkh->error_value != 0) return;
+    int n = strnlen(s, TICKLISH_MAX_OUT);
+    enum sp_return ret = sp_blocking_write(tkh->my_port, s, n, TICKLISH_PATIENCE);
+    if (ret != n) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+    }
 }
 
 
-char* tkh_query(Ticklish *tkh, const char *message, int n) {
-    pthread_mutex_lock(&(tkh->my_mutex));
+char* tkh_query(Ticklish *tkh, const char *ask, int n) {
+    LOCKON;
     tkh->error_value = 0;
-    pthread_mutex_unlock(&(tkh->my_mutex));
-    tkh_write(tkh, message);
+    UNLOCK;
+    tkh_write(tkh, ask);
     if (tkh->error_value) return NULL;
     return tkh_fixed_read(tkh, n, false);
 }
 
 
-char* tkh_flex_query(Ticklish *tkh, const char *message) {
-    pthread_mutex_lock(&(tkh->my_mutex));
+char* tkh_flex_query(Ticklish *tkh, const char *ask) {
+    LOCKON;
     tkh->error_value = 0;
-    pthread_mutex_unlock(&(tkh->my_mutex));
-    tkh_write(tkh, message);
+    UNLOCK;
+    tkh_write(tkh, ask);
     if (tkh->error_value) return NULL;
     return tkh_flex_read(tkh, false);
+}
+
+
+bool tkh_is_ticklish(Ticklish *tkh) {
+    char* reply = tkh_flex_query(tkh, "~?");
+    if (reply == NULL) return false;
+    bool ans = (tkh->error_value != 0) && tkh_string_is_ticklish(reply);
+    free((void*)reply);
+    return ans;
+}
+
+
+char* tkh_id(Ticklish *tkh) {
+    if (tkh->my_id != NULL) {
+        LOCKON;
+        char* ans = (tkh->my_id != NULL) ? strdup((char*)tkh->my_id) : NULL;
+        UNLOCK;
+        if (ans != NULL) return ans;
+    }
+    char* reply = tkh_flex_query(tkh, "~?");
+    if (reply == NULL) return NULL;
+    if (tkh->error_value != 0) {
+        free((void*) reply);
+        return NULL;
+    }
+    char* name = tkh_decode_name(reply);
+    free((void*) reply);
+    LOCKON;
+    tkh->my_id = name;
+    UNLOCK;
+    char* ans = strdup(name);
+    return ans;
+}
+
+
+enum TkhState tkh_state(Ticklish *tkh) {
+    char* reply = tkh_query(tkh, "~@", 1);
+    if (reply == NULL) return TKH_UNKNOWN;
+    bool ans = (tkh->error_value == 0) ? tkh_decode_state(reply) : TKH_UNKNOWN;
+    free((void*) reply);
+    return ans;
+}
+
+
+bool tkh_ping(Ticklish *tkh) {
+    char* reply = tkh_flex_query(tkh, "~'");
+    if (reply == NULL) return false;
+    bool ans = (tkh->error_value == 0) && !(*reply);
+    free((void*) reply);
+    return ans;
+}
+
+
+void tkh_clear(Ticklish *tkh) {
+    tkh_write(tkh, "~.");
+    if (!tkh_ping(tkh)) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+    }
+}
+
+
+bool tkh_is_error(Ticklish *tkh) { 
+    enum TkhState s = tkh_state(tkh);
+    return (s == TKH_ERRORED) || (s == TKH_UNKNOWN);
+}
+
+bool tkh_is_prog(Ticklish *tkh) { return tkh_state(tkh) == TKH_PROGRAM; }
+
+bool tkh_is_run(Ticklish *tkh) { return tkh_state(tkh) == TKH_RUNNING; }
+
+bool tkh_is_done(Ticklish *tkh) { return tkh_state(tkh) == TKH_ALLDONE; }
+
+
+TkhTimed tkh_timesync(Ticklish *tkh) {
+    struct timeval tv0, tv1;
+    TkhTimed tkt;
+    tkh_timed_init(&tkt);
+    int okay;
+    okay = gettimeofday(&tv0, NULL);
+    if (!okay) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+        return tkt;
+    }
+    char* reply = tkh_flex_query(tkh, "~#");
+    if (reply == NULL) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+        return tkt;
+    }
+    if (tkh->error_value != 0) {
+        free((void*) reply);
+        return tkt;
+    }
+    okay = gettimeofday(&tv1, NULL);
+    if (!okay || !tkh_string_is_time_report(reply)) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+        free((void*) reply);
+        return tkt;
+    }
+    struct timeval tvb = tkh_decode_time(reply);
+    free((void*) reply);
+    struct timeval tvw = tv1;
+    tkh_timeval_minus_eq(&tvw, &tv0);
+    if (tkh_timeval_compare(&tv1, &tv0) == 0) { tvw.tv_usec = 5000; }  // Recklessly guess 5 ms difference
+    tkt.zero = tv0;
+    tkh_timeval_minus_eq(&(tkt.zero), &tvb);
+    tkt.window = tvw;
+    tkt.timestamp = tv0;
+    tkt.board_at = tvb;
+    return tkt;
+}
+
+bool tkh_private_check_channels(TkhDigital *protocols, int n) {
+    for (int i = 0; i < n; i++) {
+        char c = protocols[n].channel;
+        if (c < 'A' || c > 'X') return false;
+    }
+    return true;
+}
+
+void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n) {
+    int counts[24];
+    if (!tkh_private_check_channels(protocols, n)) {
+        LOCKON;
+        tkh->error_value = -1;
+        UNLOCK;
+        return;
+    }
+    int i,j;
+    for (j = 0; j < 24; j++) counts[j] = 0;
+    char buffer[64];
+    for (i = 0; i < n; i++) {
+        char *cmd = tkh_digital_to_string(protocols + i, true);
+        if (cmd == NULL) {
+            LOCKON;
+            tkh->error_value = -1;
+            UNLOCK;
+            return;
+        }
+        int l = strnlen(cmd, 61);
+        char channel = protocols[i].channel;
+        buffer[0] = '~';
+        buffer[1] = channel;
+        memcpy(buffer + 2, cmd, l);
+        free((void*) cmd);
+        buffer[l+2] = 0;
+        if (counts[channel - 'A']) {
+            tkh_write(tkh, buffer);
+            if (tkh->error_value != 0) return;
+        }
+        counts[channel - 'A']++;
+        tkh_write(tkh, buffer);
+        if (tkh->error_value != 0) return;
+        if (!tkh_ping(tkh)) return;
+    }
 }
 

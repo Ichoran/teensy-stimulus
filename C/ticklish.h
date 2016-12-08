@@ -9,6 +9,8 @@
 
 #include <libserialport.h>
 
+#include "ticklish_util.h"
+
 #define TKH_MAX_TIME_MICROS 99999999000000ll
 
 typedef struct TkhTimed {
@@ -18,9 +20,11 @@ typedef struct TkhTimed {
     struct timeval board_at;   // Board's idea of the elapsed time
 } TkhTimed;
 
-bool tkh_timed_is_valid(TkhTimed *tkh);
+void tkh_timed_init(TkhTimed *tkt);
 
-char* tkh_timed_to_string(TkhTimed *tkh);
+bool tkh_timed_is_valid(TkhTimed *tkt);
+
+char* tkh_timed_to_string(TkhTimed *tkt);
 
 
 
@@ -47,6 +51,7 @@ char* tkh_digital_to_string(TkhDigital *tdg, bool command);
 
 #define TICKLISH_PATIENCE 500
 #define TICKLISH_BUFFER_N 256
+#define TICKLISH_MAX_OUT 64
 
 typedef struct Ticklish {
     // This stuff should be immutable (set once at creation)
@@ -61,8 +66,6 @@ typedef struct Ticklish {
     volatile char* buffer;
     volatile int buffer_start;
     volatile int buffer_end;
-
-    volatile int patience;
 
     volatile int error_value;
 } Ticklish;
@@ -85,15 +88,15 @@ char* tkh_flex_read(Ticklish *tkh, bool dollared);
 
 void tkh_write(Ticklish *tkh, const char *s);
 
-void tkh_query(Ticklish *tkh, char* ask, int n);
+char* tkh_query(Ticklish *tkh, const char* ask, int n);
 
-void tkh_flex_query(Ticklish *tkh, char* ask);
+char* tkh_flex_query(Ticklish *tkh, const char* ask);
 
 bool tkh_is_ticklish(Ticklish *tkh);
 
 char* tkh_id(Ticklish *tkh);
 
-int tkh_state(Ticklish *tkh);
+enum TkhState tkh_state(Ticklish *tkh);
 
 bool tkh_ping(Ticklish *tkh);
 

@@ -9,12 +9,41 @@
 
 #include "ticklish_util.h"
 
-int tkh_char_to_state(char c) {
+
+ void tkh_timeval_normalize(struct timeval *tv) {
+    if (tv->tv_usec < 0) {
+        tv->tv_sec -= 1;
+        tv->tv_usec += 1000000;
+    }
+    if (tv->tv_usec < 0 || tv->tv_usec >= 1000000) {
+        int div = (tv->tv_usec - 999999) / 1000000;
+        tv->tv_sec += div;
+        tv->tv_usec -= 1000000*div;
+    }
+}
+
+void tkh_timeval_minus_eq(struct timeval *tv, const struct timeval *subtract_me) {
+    tv->tv_sec -= subtract_me->tv_sec;
+    tv->tv_usec -= subtract_me->tv_usec;
+    tkh_timeval_normalize(tv);
+}
+
+int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb) {
+    struct timeval tv = *tva;
+    tkh_timeval_minus_eq(&tv, tvb);
+    if (tv.tv_sec < 0) return -1;
+    else if (tv.tv_sec > 0 || tv.tv_usec > 0) return 1;
+    else return 0;
+}
+
+
+enum TkhState tkh_char_to_state(char c) {
     switch(c) {
         case '*': return TKH_RUNNING;
         case '/': return TKH_ALLDONE;
         case '.': return TKH_PROGRAM;
-        default:  return TKH_ERRORED;
+        case '!': return TKH_ERRORED;
+        default:  return TKH_UNKNOWN;
     }
 }
 
@@ -95,8 +124,8 @@ float tkh_decode_voltage(const char *s) {
     else return v;
 }
 
-int tkh_decode_state(const char *s) {
-    if (strnlen(s,2) != 1) return TKH_ERRORED;
+enum TkhState tkh_decode_state(const char *s) {
+    if (strnlen(s,2) != 1) return TKH_UNKNOWN;
     return tkh_char_to_state(*s);
 }
 

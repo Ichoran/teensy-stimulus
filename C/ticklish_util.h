@@ -6,14 +6,15 @@
 #include <stdbool.h>
 #include <sys/time.h>
 
-#define TKH_RUNNING 2
-#define TKH_ALLDONE 1
-#define TKH_PROGRAM 0
-#define TKH_ERRORED -1
 
-int tkh_char_to_state(char c);
+enum TkhState { TKH_UNKNOWN, TKH_ERRORED, TKH_ALLDONE, TKH_PROGRAM, TKH_RUNNING };
+
+enum TkhState tkh_char_to_state(char c);
 
 static inline bool tkh_timeval_is_valid(const struct timeval *tv) { return tv->tv_usec >= 0; }
+void tkh_timeval_normalize(struct timeval *tv);
+void tkh_timeval_minus_eq(struct timeval *tv, const struct timeval *subtract_me);
+int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb);
 
 /** We recklessly reuse timeval to store durations (not time-since-epoch) */
 char* tkh_encode_time(const struct timeval *tv);
@@ -28,7 +29,7 @@ long long tkh_micros_from_timeval(const struct timeval *tv);
 
 float tkh_decode_voltage(const char *s);
 
-int tkh_decode_state(const char *s);
+enum TkhState tkh_decode_state(const char *s);
 
 
 char* tkh_encode_name(const char *s);
