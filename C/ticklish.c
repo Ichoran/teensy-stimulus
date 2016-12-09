@@ -526,3 +526,20 @@ void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n) {
     }
 }
 
+TkhTimed tkh_run(Ticklish *tkh) {
+    TkhTimed tkt;
+    tkh_timed_init(&tkt);
+    enum TkhState state = tkh_state(tkh);
+    switch(state) {
+        case TKH_PROGRAM: break;
+        case TKH_ALLDONE:
+            tkh_write(tkh, "~\"");
+            if (!tkh_ping(tkh)) return tkt;
+            break;
+        default: return tkt;
+    }
+    tkh_write(tkh, "~*");
+    if (tkh->error_value != 0 || !tkh_ping(tkh)) return tkt;
+    else return tkh_timesync(tkh);
+}
+
