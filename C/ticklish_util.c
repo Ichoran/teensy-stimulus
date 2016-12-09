@@ -28,6 +28,16 @@ void tkh_timeval_minus_eq(struct timeval *tv, const struct timeval *subtract_me)
     tkh_timeval_normalize(tv);
 }
 
+void tkh_timeval_plus_eq(struct timeval *tv, const struct timeval *add_me) {
+    tv->tv_sec += add_me->tv_sec;
+    tv->tv_usec += add_me->tv_usec;
+    if (tv->tv_usec >= 1000000) {
+        tv->tv_sec += 1;
+        tv->tv_usec -= 1000000;
+    }
+    tkh_timeval_normalize(tv);
+}
+
 int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb) {
     struct timeval tv = *tva;
     tkh_timeval_minus_eq(&tv, tvb);
@@ -39,29 +49,23 @@ int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb) {
 
 enum TkhState tkh_char_to_state(char c) {
     switch(c) {
-        case '*': return TKH_RUNNING;
-        case '/': return TKH_ALLDONE;
-        case '.': return TKH_PROGRAM;
-        case '!': return TKH_ERRORED;
+        case '*': return TKH_RUNNING; break;
+        case '/': return TKH_ALLDONE; break;
+        case '.': return TKH_PROGRAM; break;
+        case '!': return TKH_ERRORED; break;
         default:  return TKH_UNKNOWN;
     }
 }
 
 
-char* tkh_encode_time(const struct timeval *tv) {
-    char buffer[32];
-    tkh_encode_time_into(tv, buffer, 32);
-    buffer[31] = 0;  // Just in case any string impl fails to leave a terminating zero
-    strdup(buffer);
-}
-
 int tkh_encode_time_into(const struct timeval *tv, char* target, int max_length) {
     if (max_length < 8) return -1;
     if (tv->tv_sec >= 99999999) { memset(target, '9', 8); }
+    else if (tv->tv_usec < 0) { memset(target, '!', 8); }
     else {
         char buffer[32];
         if (tv->tv_sec == 0) { 
-            snprintf(buffer, max_length, "%.6f", tv->tv_usec*1e-6);
+            snprintf(buffer, 32, "0.%06ld", tv->tv_usec);
             memcpy(target, buffer, 8);
         }
         else {
@@ -76,6 +80,13 @@ int tkh_encode_time_into(const struct timeval *tv, char* target, int max_length)
     }
     if (max_length > 8) target[8] = 0;
     return 8;
+}
+
+char* tkh_encode_time(const struct timeval *tv) {
+    char buffer[10];
+    tkh_encode_time_into(tv, buffer, 8);
+    buffer[8] = 0;  // Just in case any string impl fails to leave a terminating zero
+    strdup(buffer);
 }
 
 

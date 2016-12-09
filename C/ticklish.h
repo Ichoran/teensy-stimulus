@@ -45,6 +45,8 @@ typedef struct TkhDigital {
 
 bool tkh_digital_is_valid(TkhDigital *tkh);
 
+TkhDigital tkh_zero_digital(char channel);
+
 TkhDigital tkh_simple_digital(char channel, double delay, double interval, double high, unsigned int count);
 
 TkhDigital tkh_pulsed_digital(char channel, double delay, double interval, unsigned int count, double pulse_interval, double pulse_high, unsigned int pulse_count);

@@ -66,10 +66,22 @@ bool tkh_digital_is_valid(TkhDigital *tkh) {
         tkh->pulse_high <= TKH_MAX_TIME_MICROS && tkh->pulse_low <= TKH_MAX_TIME_MICROS;
 }
 
-TkhDigital tkh_simple_digital(char channel, double delay, double interval, double high, unsigned int count) {
+TkhDigital tkh_zero_digital(char channel) {
     TkhDigital result;
-    result.duration = -1;  // Invalid default
     result.channel = channel;
+    result.duration = 0;
+    result.delay = 0;
+    result.block_high = 0;
+    result.block_low = 0;
+    result.pulse_high = 0;
+    result.pulse_low = 0;
+    result.upright = true;
+    return result;
+}
+
+TkhDigital tkh_simple_digital(char channel, double delay, double interval, double high, unsigned int count) {
+    TkhDigital result = tkh_zero_digital(channel);
+    result.duration = -1;  // Invalid default
     long long delus = (long long)rint(1e6 * delay);
     long long intus = (long long)rint(1e6 * interval);
     long long hius  = (long long)rint(1e6 * high);
@@ -86,14 +98,13 @@ TkhDigital tkh_simple_digital(char channel, double delay, double interval, doubl
 }
 
 TkhDigital tkh_pulsed_digital(char channel, double delay, double interval, unsigned int count, double pulse_interval, double pulse_high, unsigned int pulse_count) {
-    TkhDigital result;
-    result.duration = -1;
-    result.channel = channel;
+    TkhDigital result = tkh_zero_digital(channel);
+    result.duration = -1;  // Invalid default
     long long delus = (long long)rint(1e6 * delay);
     long long intus = (long long)rint(1e6 * interval);
     long long pintus  = (long long)rint(1e6 * pulse_interval);
     long long phius = (long long)rint(1e6 * pulse_high);
-    long long hius = pulse_high + (pulse_count-1)*pulse_interval;
+    long long hius = phius + (pulse_count-1)*pintus;
     long long totus = delus + ((count > 0) ? (hius + (count-1)*intus) : 0);
     if (count == 0 && delus == 0) return result;
     if (intus <= hius || pintus <= phius || hius <= 0 || phius <= 0) return result;
@@ -113,7 +124,7 @@ char* tkh_digital_to_string(TkhDigital *tdg, bool command) {
     int stride = (command) ? 9 : 10;
     strcpy(
         buffer,
-        (command) ?
+        (!command) ?
             "t12345678 d12345678 y12345678 n12345678 p12345678 q12345678 _" :
             "=12345678;12345678;12345678;12345678;12345678;12345678_"
     );
@@ -407,7 +418,7 @@ char* tkh_id(Ticklish *tkh) {
 enum TkhState tkh_state(Ticklish *tkh) {
     char* reply = tkh_query(tkh, "~@", 1);
     if (reply == NULL) return TKH_UNKNOWN;
-    bool ans = (tkh->error_value == 0) ? tkh_decode_state(reply) : TKH_UNKNOWN;
+    enum TkhState ans = (tkh->error_value == 0) ? tkh_decode_state(reply) : TKH_UNKNOWN;
     free((void*) reply);
     return ans;
 }
@@ -448,9 +459,9 @@ TkhTimed tkh_timesync(Ticklish *tkh) {
     struct timeval tv0, tv1;
     TkhTimed tkt;
     tkh_timed_init(&tkt);
-    int okay;
-    okay = gettimeofday(&tv0, NULL);
-    if (!okay) {
+    int errorcode;
+    errorcode = gettimeofday(&tv0, NULL);
+    if (errorcode) {
         LOCKON;
         tkh->error_value = -1;
         UNLOCK;
@@ -467,8 +478,8 @@ TkhTimed tkh_timesync(Ticklish *tkh) {
         free((void*) reply);
         return tkt;
     }
-    okay = gettimeofday(&tv1, NULL);
-    if (!okay || !tkh_string_is_time_report(reply)) {
+    errorcode = gettimeofday(&tv1, NULL);
+    if (errorcode || !tkh_string_is_time_report(reply)) {
         LOCKON;
         tkh->error_value = -1;
         UNLOCK;
@@ -490,7 +501,7 @@ TkhTimed tkh_timesync(Ticklish *tkh) {
 
 bool tkh_private_check_channels(TkhDigital *protocols, int n) {
     for (int i = 0; i < n; i++) {
-        char c = protocols[n].channel;
+        char c = protocols[i].channel;
         if (c < 'A' || c > 'X') return false;
     }
     return true;
@@ -577,7 +588,7 @@ int tkh_get_all_port_descriptions(char ***descsp) {
         int portnamelen = (name != NULL) ? strlen(name) : 6;
         int portmanflen = (manf != NULL) ? strlen(manf) : 6;
         char *desc = (char*)malloc(6 + portnamelen + portmanflen);
-        snprintf(desc, 6 + portnamelen + portmanflen, "%s at %s\n", name, manf);
+        snprintf(desc, 6 + portnamelen + portmanflen, "%s at %s\n", manf, name);
         desc[5 + portnamelen + portmanflen] = 0;
         descs[i] = desc;
     }

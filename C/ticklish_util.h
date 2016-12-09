@@ -18,6 +18,7 @@ enum TkhState tkh_char_to_state(char c);
 static inline bool tkh_timeval_is_valid(const struct timeval *tv) { return tv->tv_usec >= 0; }
 void tkh_timeval_normalize(struct timeval *tv);
 void tkh_timeval_minus_eq(struct timeval *tv, const struct timeval *subtract_me);
+void tkh_timeval_plus_eq(struct timeval *tv, const struct timeval *add_me);
 int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb);
 
 /** We recklessly reuse timeval to store durations (not time-since-epoch) */

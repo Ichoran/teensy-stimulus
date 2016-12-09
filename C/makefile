@@ -11,7 +11,7 @@ ticklish_example.o: makefile ticklish_example.c ticklish_util.h ticklish.h
 ticklish.o: makefile ticklish_util.h ticklish.h ticklish.c ticklish_util.o
 	$(CC) -c ticklish.c
 
-ticklish_util.o: makefile ticklish_util.h
+ticklish_util.o: makefile ticklish_util.h ticklish_util.c
 	$(CC) -c ticklish_util.c
 
 clean:
