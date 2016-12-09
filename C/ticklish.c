@@ -130,11 +130,14 @@ char* tkh_digital_to_string(TkhDigital *tdg, bool command) {
 }
 
 
+/*****************************/
+/* Ticklish struct functions */
+/*****************************/
+
 Ticklish* tkh_construct(struct sp_port* port) {
     Ticklish *tv = (Ticklish*)malloc(sizeof(Ticklish));
     tv->my_port = port;
     tv->portname = strdup(sp_get_port_name(tv->my_port));
-    tv->my_port = NULL;
     tv->my_id = NULL;
     tv->buffer = NULL;
     tv->buffer_start = 0;
@@ -159,11 +162,12 @@ void tkh_destruct(Ticklish *tkh) {
         UNLOCK;
         pthread_mutex_destroy(&(tkh->my_mutex));
     }
+    free(tkh);
 }
 
 
 bool tkh_is_connected(Ticklish *tkh) {
-    tkh->buffer != NULL;
+    return tkh->buffer != NULL;
 }
 
 
@@ -182,7 +186,10 @@ void tkh_connect(Ticklish *tkh) {
                 tkh->buffer_end = 0;
                 tkh->error_value = 0;          
             }
-            else tkh->error_value = 1;
+            else {
+                printf("Did not open; error value %d\n", sp_ok);
+                tkh->error_value = 1;
+            }
         }
         UNLOCK;
     }
@@ -239,7 +246,7 @@ int tkh_wait_for_next_buffer(Ticklish *tkh) {
 }
 
 
-char* thk_fixed_read(Ticklish *tkh, int n, bool twiddled) {
+char* tkh_fixed_read(Ticklish *tkh, int n, bool twiddled) {
     if (tkh->buffer == NULL || n <= 0) return NULL;
     char* buffer = (char*)malloc(n+1);
     int i = 0;
@@ -274,7 +281,7 @@ char* thk_fixed_read(Ticklish *tkh, int n, bool twiddled) {
 }
 
 
-char* thk_flex_read(Ticklish *tkh, bool dollared) {
+char* tkh_flex_read(Ticklish *tkh, bool dollared) {
     if (tkh->buffer == NULL) return NULL;
     char* buffer = (char*)malloc(64);
     int N = 64;
@@ -368,7 +375,7 @@ char* tkh_flex_query(Ticklish *tkh, const char *ask) {
 bool tkh_is_ticklish(Ticklish *tkh) {
     char* reply = tkh_flex_query(tkh, "~?");
     if (reply == NULL) return false;
-    bool ans = (tkh->error_value != 0) && tkh_string_is_ticklish(reply);
+    bool ans = (tkh->error_value == 0) && tkh_string_is_ticklish(reply);
     free((void*)reply);
     return ans;
 }
@@ -543,3 +550,113 @@ TkhTimed tkh_run(Ticklish *tkh) {
     else return tkh_timesync(tkh);
 }
 
+
+int tkh_private_count_port_pointers(struct sp_port **portptrs) {
+    int nports = 0;
+    if (portptrs != NULL) for (; portptrs[nports] != NULL; nports++) {}
+    return nports;
+}
+
+
+int tkh_get_all_port_descriptions(char ***descsp) {
+    struct sp_port **portptrs;
+    enum sp_return ret = sp_list_ports(&portptrs);
+    if (ret != SP_OK) return 0;
+    int nports = tkh_private_count_port_pointers(portptrs);
+    if (nports == 0) {
+        if (portptrs != NULL) sp_free_port_list(portptrs);
+        *descsp = NULL;
+        return 0;
+    }
+    char** descs = (char**)malloc(sizeof(char*) * nports);
+    *descsp = descs;
+    for (int i = 0; i < nports; i++) {
+        struct sp_port *port = portptrs[i];
+        char *name = sp_get_port_name(port);
+        char *manf = sp_get_port_usb_manufacturer(port);
+        int portnamelen = (name != NULL) ? strlen(name) : 6;
+        int portmanflen = (manf != NULL) ? strlen(manf) : 6;
+        char *desc = (char*)malloc(6 + portnamelen + portmanflen);
+        snprintf(desc, 6 + portnamelen + portmanflen, "%s at %s\n", name, manf);
+        desc[5 + portnamelen + portmanflen] = 0;
+        descs[i] = desc;
+    }
+    sp_free_port_list(portptrs);
+    return nports;
+}
+
+
+Ticklish* tkh_private_find_next_ticklish(struct sp_port **portptrs, int nports, int *j) {
+    for (int i = *j; i < nports; i++) {
+        struct sp_port *port = portptrs[i];
+        if (strcmp(sp_get_port_usb_manufacturer(port), "Teensyduino") == 0) {
+            struct sp_port *promising;
+            enum sp_return ret = sp_copy_port(port, &promising);
+            if (ret == SP_OK) {
+                Ticklish *tkh = tkh_construct(promising);
+                tkh_connect(tkh);
+                if (!tkh_is_ticklish(tkh)) {
+                    tkh_destruct(tkh);
+                }
+                else {
+                    *j = i+1;
+                    return tkh;
+                }
+            }
+        }        
+    }
+    *j = nports;
+    return NULL;
+}
+
+
+Ticklish* tkh_find_first_ticklish() {
+    struct sp_port **portptrs;
+    enum sp_return ret = sp_list_ports(&portptrs);
+    if (ret != SP_OK) return NULL;
+    int nports = tkh_private_count_port_pointers(portptrs);
+    if (nports == 0) {
+        if (portptrs != NULL) sp_free_port_list(portptrs);
+        return NULL;
+    }
+    int i = 0;
+    Ticklish *ans = tkh_private_find_next_ticklish(portptrs, nports, &i);
+    sp_free_port_list(portptrs);
+    return ans;
+}
+
+
+int tkh_find_all_ticklish(Ticklish ***tkhsp) {
+    struct sp_port **portptrs;
+    enum sp_return ret = sp_list_ports(&portptrs);
+    if (ret != SP_OK) {
+        *tkhsp = NULL;
+        return 0;
+    }
+    int nports = tkh_private_count_port_pointers(portptrs);
+    if (nports == 0) {
+        if (portptrs != NULL) sp_free_port_list(portptrs);
+        *tkhsp = NULL;
+        return 0;
+    }
+    int i = 0;
+    int k = 0;
+    Ticklish **tkhs = (Ticklish**)malloc(sizeof(Ticklish*)*nports);
+    while (i < nports) {
+        tkhs[k] = tkh_private_find_next_ticklish(portptrs, nports, &i);
+        if (tkhs[k] != NULL) k++;
+    }
+    sp_free_port_list(portptrs);
+    if (k == 0) {
+        *tkhsp = NULL;
+    }
+    else if (k == nports) {
+        *tkhsp = tkhs;
+    }
+    else {
+        *tkhsp = (Ticklish**)malloc(sizeof(Ticklish*)*k);
+        memcpy(*tkhsp, tkhs, sizeof(Ticklish*)*k);
+        free(tkhs);
+    }
+    return k;
+}

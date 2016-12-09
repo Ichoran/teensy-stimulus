@@ -3,6 +3,10 @@
 #ifndef KERRR_TICKLISH_UTIL
 #define KERRR_TICKLISH_UTIL
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <sys/time.h>
 
@@ -38,5 +42,10 @@ char* tkh_decode_name(const char *s);
 
 bool tkh_string_is_ticklish(const char *s);
 bool tkh_string_is_time_report(const char *s);
+
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

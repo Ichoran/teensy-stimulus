@@ -3,6 +3,10 @@
 #ifndef KERRR_TICKLISH
 #define KERRR_TICKLISH
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <pthread.h>
 #include <sys/time.h>
@@ -112,5 +116,30 @@ TkhTimed tkh_timesync(Ticklish *tkh);
 void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n);
 
 TkhTimed tkh_run(Ticklish *tkh);
+
+
+
+/** Pass a reference to a pointer for an array of descriptions.
+  * Function returns the number of things actually passed back.
+  * Free each one, then free the array (with `free`).
+  */
+int tkh_get_all_port_descriptions(char ***descsp);
+
+/** Gets a Ticklish if available.  Destroy with tkh_destruct.
+  * Port is OPEN when the routine returns!
+  */
+Ticklish* tkh_find_first_ticklish();
+
+/** Pass a reference to a pointer for an array of Ticklish pointers.
+  * Function returns the number of things actually passed back.
+  * Call tkh_destruct on each item in the array, then `free` the array.
+  * Every port is OPEN when the routine returns!
+  */
+int tkh_find_all_ticklish(Ticklish ***tkhsp);
+
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
