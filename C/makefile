@@ -1,4 +1,4 @@
-CC = gcc -O2
+CC = gcc -O2 -std=gnu99
 
 all: ticklish_util.o ticklish.o ticklish_example
 
