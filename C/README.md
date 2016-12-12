@@ -6,14 +6,16 @@ from languages with a C FFI (foreign function interface).
 
 ## Requirements
 
-Serial port communication is performed with libserialport.  You are responsible for
+Serial port communication is performed with `libserialport`.  You are responsible for
 downloading it yourself one way or another; be aware that libserialport is under the
 LGPL license so if you modify it, those modifications must be shared with any software
 you distribute.  libserialport is not distributed with this package to ensure that it
 remains unmodified and called only as a library.  Version 0.1.1+ is
 required.
 
-To compile under Windows, MinGW must be installed. 
+To compile under Windows...actually, I haven't figured out how to do this yet. 
+
+You'll need the `pthread` library available.
 
 ## Usage
 
