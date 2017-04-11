@@ -555,7 +555,7 @@ void yellr3d(int rl, Dura g, Dura n, Dura io) {
 #define MSGN 62
 #define BUFN 128
 
-byte msg[MSGN];
+byte msg[MSGN+1];
 int erri = 0;
 
 byte buf[BUFN];
