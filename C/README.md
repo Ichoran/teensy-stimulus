@@ -13,6 +13,10 @@ you distribute.  libserialport is not distributed with this package to ensure th
 remains unmodified and called only as a library.  Version 0.1.1+ is
 required.
 
+If compiling under Linux, you probably need to run "ldconfig" after installing
+`libserialport` in order to make it visible.  Also, don't forget to place 49-teensy.rules
+into /etc/udev/rules.d/ as mentioned on the Teensy home page!
+
 To compile under Windows...actually, I haven't figured out how to do this yet. 
 
 You'll need the `pthread` library available.

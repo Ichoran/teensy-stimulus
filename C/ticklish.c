@@ -600,7 +600,8 @@ int tkh_get_all_port_descriptions(char ***descsp) {
 Ticklish* tkh_private_find_next_ticklish(struct sp_port **portptrs, int nports, int *j) {
     for (int i = *j; i < nports; i++) {
         struct sp_port *port = portptrs[i];
-        if (strcmp(sp_get_port_usb_manufacturer(port), "Teensyduino") == 0) {
+        const char* manf = sp_get_port_usb_manufacturer(port);
+        if (manf != NULL && strcmp(manf, "Teensyduino") == 0) {
             struct sp_port *promising;
             enum sp_return ret = sp_copy_port(port, &promising);
             if (ret == SP_OK) {
