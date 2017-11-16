@@ -1,6 +1,8 @@
 package lab.kerrr.ticklish
 
 import java.time._
+import scala.util.control.NonFatal
+
 
 sealed trait TicklishState { def indicator: Char }
 object TicklishState {
@@ -38,12 +40,26 @@ object TicklishUtil {
   def decodeVoltage(s: String): Float = s.toFloat
   def decodeState(s: String): TicklishState = TicklishState.charToState(s.head)
 
+  def encodeDrift(d: Double): String = {
+    val ad = math.abs(d);
+    if (!(ad >= 1.00000001e-8 && ad < 1.3)) "+00000000"
+    else "%c%08d".format(if (d < 0) '-' else '+', math.round(1.0/ad).toInt)
+  }
+  def decodeDrift(s: String): Option[Double] =
+    if (s.length != 11) None
+    else if (s.charAt(0) != '^') None
+    else try { 
+      val x = s.substring(2, 10).toDouble * (if (s.charAt(1) == '-') -1 else 1)
+      Some(if (x == 0) 0 else 1.0/x)
+    }
+    catch { case e if NonFatal(e) => None }
+
   def encodeName(name: String): String = f"IDENTITY$name"
-  def decodeName(s: String): String =
-    if (isTicklish(s)) s drop 12
+  def decodeName(s: String): (String, String) =
+    if (isTicklish(s)) (s drop 12, s.substring(8,11))
     else throw new IllegalArgumentException("Unknown device type")
 
-  def isTicklish(s: String): Boolean = s.startsWith("Ticklish1.0 ")
+  def isTicklish(s: String): Boolean = s.startsWith("Ticklish1.")
 
   def isTimeReport(s: String): Boolean = s.length == 15 && {
     var i = 0

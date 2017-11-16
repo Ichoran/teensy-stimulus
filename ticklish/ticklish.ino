@@ -631,6 +631,9 @@ void write_voltage_5(int digital_value, char* buffer, bool digital) {
  * Initialization -- run once only at start! *
  *********************************************/
 
+#define DRIFT_OFFSET 128
+int drift_rate;           // Correction for drift
+
 #define WHON 62
 byte whoami[WHON];
 int whoi = 0;
@@ -657,6 +660,26 @@ bool eeprom_set(const byte* msg, int eepi, int max, bool zero) {
   return changed;
 }
 
+bool eeprom_set_int(int value, int eepi) {
+  int old = eeprom_get_int(eepi);
+  if (old == value) return false;
+  for (int i = 0; i < 4; i++) {
+    byte b = (byte)(value & 0xFF);
+    value >>= 8;
+    EEPROM.write(eepi+i, b);
+  }
+  return true;
+}
+
+int eeprom_get_int(int eepi) {
+  int value = 0;
+  for (int i = 0; i < 4; i++) {
+    value >>= 8;
+    value = value | ((int)(EEPROM.read(eepi+i)) << 24);
+  }
+  return value;
+}
+
 void eeprom_read_who() {
   whoami[0] = '$';
   int i = 1;
@@ -674,9 +697,13 @@ void eeprom_read_who() {
 void tell_who() { Serial.write(whoami, whoi); Serial.send_now(); }
 
 void init_eeprom() {
-  bool first = eeprom_set((byte*)"Ticklish1.0 ", 0, WHON, false);
-  if (first) eeprom_set((byte*)"", 12, WHON, true);
+  bool first = eeprom_set((byte*)"Ticklish1.1 ", 0, WHON, false);
+  if (first) {
+    eeprom_set((byte*)"", 12, WHON, true);
+    eeprom_set_int(0, DRIFT_OFFSET);
+  }
   eeprom_read_who();
+  drift_rate = eeprom_get_int(DRIFT_OFFSET);
 }
 
 void init_analog() {
@@ -704,6 +731,7 @@ void init_digital() {
  ***********/
 
 volatile int tick;        // Last CPU clock count
+volatile int tock;        // Clock counts since last correction
 Dura global_clock;        // Time since start of running.
 Dura next_event;          // Time of next event.  Just busywait until then.
 
@@ -791,6 +819,7 @@ void go_go_go() {
     io_anyway = global_clock;
     io_anyway += MHZ * MAX_BUSY_US;
     tick = ARM_DWT_CYCCNT;
+    tock = 0;
     runlevel = RUN_GO;
   }
   else if (runlevel != RUN_ERROR && runlevel != RUN_TO_ERROR) {
@@ -933,6 +962,21 @@ void process_say_the_time() {
   tell_msg();
 }
 
+void process_say_the_drift(int old_drift, int new_drift, bool changed, bool query) {
+  msg[0] = '~';
+  msg[1] = '^';
+  int drift = old_drift;
+  if (drift < 0) { drift = -drift; msg[2] = '-'; } else msg[2] = '+';
+  if (drift >= 100000000) drift = 0;
+  for (int i = 0; i < 8; i++) {
+    msg[10-i] = (drift % 10) + '0';
+    drift /= 10;
+  }
+  msg[11] = (changed) ? '!' : ((query && old_drift != new_drift) ? '?' : '.');
+  msg[12] = 0;
+  tell_msg();
+}
+
 void process_say_empty() {
   Serial.write("$\n");
   Serial.send_now();
@@ -978,6 +1022,48 @@ void process_say_the_voltage(char ch) {
   }
 }
 
+bool process_set_the_drift(int new_drift, int save) {
+  drift_rate = (new_drift == 1) ? 2 : new_drift;
+  if (save) return eeprom_set_int(drift_rate, DRIFT_OFFSET);
+  else return false;
+}
+
+bool process_drift_command() {
+  if (bufi < 12) return false;
+  int sign = 0;
+  if (buf[2] == '+') sign = 1;
+  else if (buf[2] == '-') sign = -1;
+  if (sign == 0) {
+    error_with_message("Bad drift correction, missing +-: ", (char*)buf, 12);
+  }
+  else {
+    int number = 0;
+    for (int i = 3; i<11; i++) {
+      int v = buf[i] - '0';
+      if (v < 0 || v > 9) {
+        error_with_message("Invalid drift correction number: ", (char*)buf, 12);
+        number = 0x80000000;
+        break;
+      }
+      else number = 10*number + (buf[i] - '0');
+    }
+    if (number > -1000000000 && number < 1000000000) {
+      if (buf[12] == '^') {
+        drift_rate = eeprom_get_int(DRIFT_OFFSET);
+        buf[12] = '?';
+      }
+      int old_drift = drift_rate;
+      bool changed = false;
+      if (buf[11] != '?') {
+        changed = process_set_the_drift(sign*number, buf[12] == '!');
+      }
+      process_say_the_drift(old_drift, sign*number, changed, buf[12] == '?');
+    }
+  }
+  discard_buf(12);
+  return true;
+}
+
 void process_error_command() {
   if (bufi < 2) return;
   if (buf[0] != '~') {
@@ -1011,6 +1097,7 @@ void process_complete_command() {
     case '?': tell_who(); break;
     case '/': break;
     case '\'': process_say_empty(); break;
+    case '^': if (!process_drift_command()) return; break;
     default:
       if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
         if (bufi < 3) return;
@@ -1108,6 +1195,7 @@ void process_init_command() {
       case '\'': process_say_empty(); break;
       case '/': break;
       case '*': process_start_running(); break;
+      case '^': if (!process_drift_command()) return; break;
       default:
         error_with_message("Command not valid (setting): ", (char*)buf, 2);
     }
@@ -1152,6 +1240,7 @@ void process_runtime_command() {
       case '?': tell_who(); break;
       case '/': process_stop_running(); break;
       case '\'': process_say_empty(); break;
+      case '^': if (!process_drift_command()) return; break;
       default:
         error_with_message("Command not valid (running): ", (char*)buf, 2);
     }
@@ -1182,6 +1271,7 @@ void setup() {
   next_event = (Dura){ 0, 0 };
   led_is_on = false;
   tick = ARM_DWT_CYCCNT;
+  tock = 0;
   runlevel = RUN_PROGRAM;
 }
 
@@ -1189,12 +1279,37 @@ void setup() {
 int lastrun = -10;
 #endif
 
-// Runs over and over forever (after setup() finishes)
-void loop() {
+int time_passes() {
   int now = ARM_DWT_CYCCNT;
   int delta = now - tick;
   tick = now;
+  int x, y;
+  if (drift_rate != 0) {
+    x = (drift_rate > 0) ? drift_rate : -drift_rate;
+    tock += delta;
+    if (tock > x) {
+      if (tock > (x << 4)) {
+        y = tock/x;
+        tock = tock - y*x;
+      }
+      else {
+        y = 1;
+        tock -= x;
+        while (tock > x) {
+          y++;
+          tock -= x;
+        }
+      }
+      delta += (drift_rate > 0) ? y : -y;
+    }
+  }
   global_clock += delta;
+  return delta;
+}
+
+// Runs over and over forever (after setup() finishes)
+void loop() {
+  int delta = time_passes();
   bool urgent = false;
   if (next_event < global_clock) {
     urgent = true;
@@ -1234,10 +1349,7 @@ void loop() {
 #ifdef YELL_DEBUG
       if (io_anyway < global_clock) yell("io");
 #endif
-      now = ARM_DWT_CYCCNT;
-      delta = now - tick;
-      tick = now;
-      global_clock += delta;
+      delta = time_passes();
       io_anyway = global_clock;
       io_anyway += MHZ * MAX_BUSY_US;
     }

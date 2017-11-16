@@ -10,7 +10,9 @@ import jssc._
 
 class Ticklish private[ticklish] (val portname: String) {
   private var port: SerialPort = null
-  private var myID: String = null
+  private var cachedIdentity: String = null
+  private var myId: String = null
+  private var myVersion: String = null
   private val received = new java.util.concurrent.LinkedBlockingDeque[ByteBuffer]
   private var patience = 500
   private val patienceUnit = java.util.concurrent.TimeUnit.MILLISECONDS  // DO NOT change this!  `readBytes` is always milliseconds!
@@ -39,7 +41,9 @@ class Ticklish private[ticklish] (val portname: String) {
   def disconnect() {
     if (port ne null) port.closePort
     port = null
-    myID = null
+    cachedIdentity = null
+    myVersion = null
+    myId = null
     received.clear
   }
   
@@ -93,12 +97,45 @@ class Ticklish private[ticklish] (val portname: String) {
 
   def flexQuery(s: String) = { write(s); flexRead() }
 
-  def isTicklish(): Boolean = try { TicklishUtil.isTicklish(flexQuery("~?")) } catch { case t if NonFatal(t) => false }
+  def isTicklish(): Boolean = 
+    try { 
+      if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
+      TicklishUtil.isTicklish(cachedIdentity) 
+    } catch { case t if NonFatal(t) => false }
 
   def id(): String = {
-    if (myID eq null) myID = TicklishUtil.decodeName(flexQuery("~?"))
-    myID
+    if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
+    if (myId == null) myId = TicklishUtil.decodeName(cachedIdentity)._1
+    myId
   }
+
+  def version(): String = {
+    if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
+    if (myVersion == null) myVersion = TicklishUtil.decodeName(cachedIdentity)._2
+    myVersion
+  }
+
+  def getDrift(): Double = TicklishUtil.decodeDrift(query("~^+00000000?", 11)).getOrElse(Double.NaN)
+  def setDrift(error: Double, toEEPROM: Boolean = false): Option[Boolean] =
+    if (isError) None
+    else {
+      try {
+        val ans = query("~^" + TicklishUtil.encodeDrift(error) + (if (toEEPROM) "!" else "."), 11)
+        TicklishUtil.decodeDrift(ans).map(_ => ans.endsWith("!"))
+      } catch { case e if NonFatal(e) => None }   
+    }
+  def fixDrift(first: Ticklish.Timed, second: Ticklish.Timed, minimumError: Double = 1e-6, toEEPROM: Boolean = false): Option[Boolean] =
+    if (isError) None
+    else {
+      val jitter = java.time.Duration.between(first.zero, second.zero)
+      val elapsed = second.boardAt minus first.boardAt
+      val measured = (jitter.getSeconds + 1e-9*jitter.getNano)/(elapsed.getSeconds + 1e-9*elapsed.getNano)
+      val already = getDrift()
+      if (already.isNaN) None
+      else if (math.abs(measured) < minimumError) Some(false)
+      else setDrift(measured + already, toEEPROM)
+    }
+  def zeroDrift(): Boolean = try { query("~^+00000000.", 11); true } catch { case t if NonFatal(t) => false  }
 
   def state(): TicklishState = TicklishUtil.decodeState(query("~@", 1))
 

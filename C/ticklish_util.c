@@ -46,6 +46,18 @@ int tkh_timeval_compare(const struct timeval *tva, const struct timeval *tvb) {
     else return 0;
 }
 
+double tkh_timeval_to_double(const struct timeval *tv) {
+    return tv->tv_sec + 1e-6*(tv->tv_usec);
+}
+
+struct timeval tkh_timeval_from_double(double t) {
+    struct timeval tv;
+    tv.tv_sec = (int)floor(t);
+    tv.tv_usec = lrint((t - tv.tv_sec)*1e6);
+    tkh_timeval_normalize(&tv);
+    return tv;
+}
+
 
 enum TkhState tkh_char_to_state(char c) {
     switch(c) {
@@ -82,13 +94,6 @@ int tkh_encode_time_into(const struct timeval *tv, char* target, int max_length)
     return 8;
 }
 
-char* tkh_encode_time(const struct timeval *tv) {
-    char buffer[10];
-    tkh_encode_time_into(tv, buffer, 8);
-    buffer[8] = 0;  // Just in case any string impl fails to leave a terminating zero
-    strdup(buffer);
-}
-
 
 struct timeval tkh_decode_time(const char *s) {
     struct timeval tv = {0, -1};   // Error by default
@@ -115,6 +120,34 @@ long long tkh_micros_from_timeval(const struct timeval *tv) {
 }
 
 
+int tkh_encode_drift_into(double drift, char* target, int max_length) {
+    if (max_length < 9) return -1;
+    if (drift < 0) *target = '-';
+    else *target = '+';
+    drift = fabs(drift);
+    int value = (drift >= 1.00000001e-8 && drift < 1.3) ? lrint(1.0/drift) : 0;
+    snprintf(target+1, 9, "%08d", value);
+    target[9] = 0;
+    return 9;
+}
+
+double tkh_decode_drift(const char *s) {
+    int sign;
+    if (*s == '+') sign = 1;
+    else if (*s == '-') sign = -1;
+    else return NAN;
+    int number = 0;
+    int i;
+    for (i = 1; i < 9; i++) {
+        char c = s[i];
+        if (c < '0' || c > '9') return NAN;
+        number = number*10 + (c - '0');
+    }
+    double x = sign * number;
+    if (x == 0) return 0;
+    else return 1.0/x;
+}
+
 
 float tkh_decode_voltage(const char *s) {
     int ndp = 0;
@@ -140,22 +173,32 @@ enum TkhState tkh_decode_state(const char *s) {
     return tkh_char_to_state(*s);
 }
 
-char* tkh_encode_name(const char *s) {
-    size_t n = strnlen(s, 53);
-    char* name = malloc(11+n);
-    snprintf(name, 11+n, "$IDENTITY%s\n", s);
-    name[n+10] = 0;  // In case snprintf impl doesn't leave a null on the end
-    return name;
+int tkh_encode_name_into(const char *s, char *target, int max_length) {
+    size_t n = strnlen(s, 53) + 11;
+    if (n > max_length) return -1;
+    snprintf(target, n, "$IDENTITY%s\n", s);
+    if (target[n-2] != '\n') target[n-2] = '\n';
+    return n;
 }
 
-char* tkh_decode_name(const char *s) {
-    if (!tkh_string_is_ticklish(s)) return NULL;
-    else return strndup(s+12, 51);
+int tkh_decode_name_into(const char *s, char *id, int max_length, char *version) {
+    if (!tkh_string_is_ticklish(s)) return -1;
+    size_t n = strnlen(s, 64) - 12;
+    if (version != NULL) {
+        version[0] = s[8];
+        version[1] = s[9];
+        version[2] = s[10];
+        version[3] = 0;
+    }
+    if (n+1 > max_length || n < 0) return -1;
+    memcpy(id, s+12, n);
+    id[n] = 0;
+    return n+1;
 }
 
 
 bool tkh_string_is_ticklish(const char *s) {
-    return strncmp(s, "Ticklish1.0 ", 12) == 0;
+    return strncmp(s, "Ticklish1.", 10) == 0;
 }
 
 bool tkh_string_is_time_report(const char *s) {

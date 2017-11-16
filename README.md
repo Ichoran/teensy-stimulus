@@ -152,6 +152,22 @@ After a run is complete, the previous program remains intact.  Before setting pa
 
 To clear all stimuli, use `~.`.  To refresh stimuli (to run the same protocol again), use `~"`.  One cannot run a protocol or modify it after a run is complete unless it is either cleared or refreshed.  A refreshed protocol can be modified (but only the last stimulus train(s) are available).
 
+### Drift
+
+You can get timing information during a run with the `#` command.  This can be used to measure drift between the Teensy board clock and the clock of the communicating computer.  To request that the Teensy apply a drift to its own clock, calculate teensy_reported_interval/(locally_measured_interval - teensy_reported_interval), round it to an 8 digit number padded by zeros, and send it with the `^` command as follows:
+
+```
+~^+12345678.
+```
+
+Use `+` and `-` to indicate sign (symbol is mandatory).  All zeros indicates no drift correction. Use `!`  instead of `.` to write to EEPROM so the same delay will be used next time.  Use `?` to not even set the drift, just query the existing one.  Use `^` instead of `!` to read the previously-saved EEPROM value instead of using the one passed in.
+
+The board replies with the previous delay value using the same format, except it uses `.` at the end if the new value was not written and `!` if it was; if it was a query or a read-from-EEPROM, and the new value is not the same as the old, it will reply with `?` instead of `.`.  When requesting a read from EEPROM, the "old" value is the EEPROM value, not the memory value from before the request.
+
+Note that times will be reported as corrected by the drift factor, so you cannot directly compute a new drift correction when an old one is in place.
+
+Drift can be set at any time except in an error state, and will take effect immediately.
+
 ## Visual feedback
 
 The Teensy board contains an on-board LED which will blink to report on its status.
@@ -204,20 +220,22 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 
 #### No Parameters
 
-| Command | Char | Result? | Additional Description |
-|---------|--------------|---------|------------------------|
-| Run       | `*` | None | Starts all protocols running.  (Error if already running.) |
-| Abort     | `/` | None | Stops any running protocol. |
-| Clear     | `.` | None | Clears errors & protocols. |
-| Refresh   | `"` | None | Restores protocols from prior run to use again. |
-| State?    | `@` | 2 chars | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
-| Report    | `#` | 16 chars | `$01234567.654321\n` or `$error message\n`; time == 0 if not running. |
+|  Command  | Char| Result?     | Additional Description |
+|-----------|-----|-------------|------------------------|
+| Run       | `*` | None        | Starts all protocols running.  (Error if already running.) |
+| Abort     | `/` | None        | Stops any running protocol. |
+| Clear     | `.` | None        | Clears errors & protocols. |
+| Refresh   | `"` | None        | Restores protocols from prior run to use again. |
+| State?    | `@` | 2 chars     | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
+| Report    | `#` | 16 chars    | `$01234567.654321\n` or `$error message\n`; time == 0 if not running. |
 | Identity  | `?` | 10-62 chars | `$Ticklish1.0 ` + message + `\n` |
-| Ping      | `'` | 2 chars | `$\n` (empty variable-length reply) |
+| Ping      | `'` | 2 chars     | `$\n` (empty variable-length reply) |
 
 #### With Parameters
 
-*There are no channel-independent commands that take parameters at this time save the identity-setting command (see above).*
+| Command               |Char | Parameter                   | Result?      | Additional Description |
+|-----------------------|-----|-----------------------------|--------------|------------------------|
+| Set drift             | `^` | 10 chars: +-, 8 digits, .?! | as parameter | Sets 1/n drift; replies with previous drift |
 
 ### Channel-Dependent Commands
 
@@ -227,35 +245,35 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 
 *The command start character and channel number are followed by a single command character.*
 
-| Command | Char | Result? | Additional Description |
-|---------|--------------|---------|------------------------|
-| Run alone       | `*` | None | Runs this output channel protocol alone.  (Must not be running.) |
-| Abort run       | `/` | None | Turns off this output channel.  Remaining protocol (if any) continues. |
-| Check state     | `@` | 5 chars | Run level digit, `;`, three digit train number. See text for details. |
+| Command         |Char | Result?  | Additional Description |
+|-----------------|-----|----------|------------------------|
+| Run alone       | `*` | None     | Runs this output channel protocol alone.  (Must not be running.) |
+| Abort run       | `/` | None     | Turns off this output channel.  Remaining protocol (if any) continues. |
+| Check state     | `@` | 5 chars  | Run level digit, `;`, three digit train number. See text for details. |
 | Check quality   | `#` | 61 chars | 8 decimal numbers. See text for details |
-| Usual polarity  | `u` | None | Stimuli are low-to-high (digital) or waveform is normal (analog). |
-| Invert polarity | `i` | None | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
-| Sinusoidal      | `s` | None | Analog stimulus should be sinusoidal. |
-| Triangular      | `r` | None | Analog stimulus should be triangular. |
-| Append train    | `&` | None | Adds a new stimulus train to follow the existing one. |
-| Query voltage   | `?` | 6 chars | `~` followed by voltage in `D.DDD` format (5 digits) |
+| Usual polarity  | `u` | None     | Stimuli are low-to-high (digital) or waveform is normal (analog). |
+| Invert polarity | `i` | None     | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
+| Sinusoidal      | `s` | None     | Analog stimulus should be sinusoidal. |
+| Triangular      | `r` | None     | Analog stimulus should be triangular. |
+| Append train    | `&` | None     | Adds a new stimulus train to follow the existing one. |
+| Query voltage   | `?` | 6 chars  | `~` followed by voltage in `D.DDD` format (5 digits) |
 
 #### With Parameters
 
 *The command start character and channel number are followed by a command character and a parameter (specified below).*
 
-| Command | Char | Parameter | Result? | Additional Description |
-|---------|--------------|-----------|---------|------------------------|
-| Set total time        | `t` | 8 chars: duration | None | |
-| Set initial delay     | `d` | 8 chars: duration | None | |
-| Set stimulus on time  | `s` | 8 chars: duration | None | |
-| Set stimulus off time | `z` | 8 chars: duration | None | |
-| Set pulse on time     | `p` | 8 chars: duration | None | Digital channels only. |
-| Set pulse off time    | `q` | 8 chars: duration | None | Digital channels only. |
-| Set period            | `w` | 8 chars: duration | None | Analog channels only.  Minimum period 1 ms. |
-| Set amplitude         | `a` | 4 chars: amplitude | None | Analog channels only.  Values from 0 to 2047. |
-| Set full protocol     | `=` | 54 chars: 6x8 durations + 5 `;` + `u` or `i` | None | Digital channels only. |
-| Set and run protocol  | `:` | 54 chars: same as `=` | None | Clears all other protocols. |
+| Command               |Char | Parameter         | Result? | Additional Description |
+|-----------------------|-----|-------------------|---------|------------------------|
+| Set total time        | `t` | 8 chars: duration | None    | |
+| Set initial delay     | `d` | 8 chars: duration | None    | |
+| Set stimulus on time  | `s` | 8 chars: duration | None    | |
+| Set stimulus off time | `z` | 8 chars: duration | None    | |
+| Set pulse on time     | `p` | 8 chars: duration | None    | Digital channels only. |
+| Set pulse off time    | `q` | 8 chars: duration | None    | Digital channels only. |
+| Set period            | `w` | 8 chars: duration | None    | Analog channels only.  Minimum period 1 ms. |
+| Set amplitude         | `a` | 4 chars: ampl.    | None    | Analog channels only.  Values from 0 to 2047. |
+| Set full protocol     | `=` | 54 chars: 6x8 +etc| None    | Digital channels only. |
+| Set and run protocol  | `:` | 54 chars: as `=`  | None    | Clears all other protocols. |
 
 ### Allowed Commands by State
 
@@ -276,6 +294,7 @@ Possible states:
 | `~#`  | `ECPR` | N/A |
 | `~?`  | `ECPR` | N/A |
 | `~'`  | `ECPR` | N/A |
+| `~^`  | `CPR`  | N/A |
 | `~A*` | `P`    | error |
 | `~A/` | `R`    | ignored |
 | `~A@` | `CPR`  | N/A |
@@ -301,6 +320,12 @@ Possible states:
 ## Examples
 
 #### Single event protocol
+
+Suppose we wish to have the LED blink three times a second for ten seconds.  We can run the following protocol:
+
+```
+~X=10.00000;0.000001;0.033333;0.300000;0.050000;0.050000u
+```
 
 Suppose we wish to open a valve for 10s after 1500s.  We can set this protocol to run on the first channel as follows:
 

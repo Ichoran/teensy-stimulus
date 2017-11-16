@@ -68,6 +68,7 @@ typedef struct Ticklish {
 
     // This stuff is mutable and the above mutex should be locked before any of this is altered
     volatile char* my_id;
+    volatile char version[4];
 
     volatile char* buffer;
     volatile int buffer_start;
@@ -114,6 +115,11 @@ bool tkh_is_run(Ticklish *tkh);
 bool tkh_is_done(Ticklish *tkh);
 
 TkhTimed tkh_timesync(Ticklish *tkh);
+
+double tkh_get_drift(Ticklish *tkh);
+double tkh_set_drift(Ticklish *tkh, double drift, bool writeEEPROM);
+int tkh_fix_drift(Ticklish *tkh, TkhTimed *first, TkhTimed *second, double minError, bool writeEEPROM);
+int tkh_zero_drift(Ticklish *tkh);
 
 void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n);
 

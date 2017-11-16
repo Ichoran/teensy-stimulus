@@ -405,12 +405,20 @@ char* tkh_id(Ticklish *tkh) {
         free((void*) reply);
         return NULL;
     }
-    char* name = tkh_decode_name(reply);
+    char name[64];
+    char version[4];
+    tkh_decode_name_into(reply, name, 60, version);
+    char* my_name = strndup(name, 60);
     free((void*) reply);
     LOCKON;
-    tkh->my_id = name;
+    tkh->my_id = my_name;
+    // Manually unrolled assignment due to volatile modifier not playing nice with strncpy
+    tkh->version[0] = version[0];
+    tkh->version[1] = version[1];
+    tkh->version[2] = version[2];
+    tkh->version[3] = version[3];
     UNLOCK;
-    char* ans = strdup(name);
+    char* ans = strdup(my_name);
     return ans;
 }
 
@@ -497,6 +505,49 @@ TkhTimed tkh_timesync(Ticklish *tkh) {
     tkt.timestamp = tv0;
     tkt.board_at = tvb;
     return tkt;
+}
+
+double tkh_get_drift(Ticklish *tkh) {
+    char *reply = tkh_query(tkh, "~^+00000000?", 11);
+    double ans = tkh_decode_drift(reply);
+    free((void*) reply);
+    return ans;
+}
+
+double tkh_set_drift(Ticklish *tkh, double drift, bool writeEEPROM) {
+    char buffer[16];
+    if (tkh_is_error(tkh)) return NAN;
+    buffer[0] = '~';
+    buffer[1] = '^';
+    tkh_encode_drift_into(drift, buffer+2, 13);
+    buffer[11] = (writeEEPROM) ? '!' : '.';
+    buffer[12] = 0;
+    char *reply = tkh_query(tkh, buffer, 11);
+    double ans = tkh_decode_drift(reply);
+    free((void*) reply);
+    return ans;
+}
+
+int tkh_fix_drift(Ticklish *tkh, TkhTimed *first, TkhTimed *second, double minDrift, bool writeEEPROM) {
+    struct timeval zero_tv = second->zero;
+    tkh_timeval_minus_eq(&zero_tv, &(first->zero));
+    double delta_zero = tkh_timeval_to_double(&zero_tv);
+    struct timeval board_tv = second->board_at;
+    tkh_timeval_minus_eq(&board_tv, &(first->board_at));
+    double delta_board = tkh_timeval_to_double(&board_tv);
+    double drift = (delta_board == 0) ? 0 : delta_zero/delta_board;
+    double already = tkh_get_drift(tkh);
+    if (fabs(drift) < minDrift) return 0;
+    if (isnan(already) || isnan(tkh_set_drift(tkh, drift + already, writeEEPROM))) return -1;
+    if (tkh_is_error(tkh)) return -1;
+    return 1;
+}
+
+int tkh_zero_drift(Ticklish *tkh) {
+    char *reply = tkh_query(tkh, "~^+00000000.", 11);
+    int ans = isnan(tkh_decode_drift(reply));
+    free((void*) reply);
+    return ans;
 }
 
 bool tkh_private_check_channels(TkhDigital *protocols, int n) {
