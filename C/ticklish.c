@@ -570,6 +570,15 @@ void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n) {
     for (j = 0; j < 24; j++) counts[j] = 0;
     char buffer[64];
     for (i = 0; i < n; i++) {
+        char channel = protocols[i].channel;
+        buffer[0] = '~';
+        buffer[1] = channel;
+        if (counts[channel - 'A']) {
+            buffer[2] = '&';
+            buffer[3] = 0;            
+            tkh_write(tkh, buffer);
+            if (tkh->error_value != 0) return;
+        }
         char *cmd = tkh_digital_to_string(protocols + i, true);
         if (cmd == NULL) {
             LOCKON;
@@ -578,16 +587,9 @@ void tkh_set(Ticklish *tkh, TkhDigital *protocols, int n) {
             return;
         }
         int l = strnlen(cmd, 61);
-        char channel = protocols[i].channel;
-        buffer[0] = '~';
-        buffer[1] = channel;
         memcpy(buffer + 2, cmd, l);
         free((void*) cmd);
         buffer[l+2] = 0;
-        if (counts[channel - 'A']) {
-            tkh_write(tkh, buffer);
-            if (tkh->error_value != 0) return;
-        }
         counts[channel - 'A']++;
         tkh_write(tkh, buffer);
         if (tkh->error_value != 0) return;
