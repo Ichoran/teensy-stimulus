@@ -64,9 +64,17 @@ bool assume_in[DIG] = {
 };
 
 // The analog channels supported; support is a fiction currently.
-#define ANA 1
-#define ANALOG_DIVS 4096
+#define ANA 2
+#define ANALOG_DIVS 1024
 int16_t wave[ANALOG_DIVS];
+
+#define DPI 10
+bool can_dpi[DIG] = {
+  false, false, false, false, false, false, false, false, false, false,
+  true, true, true, true, true, true, true, true, true, true, true, true, true,
+  false
+}
+uint64_t dpi_buffer[DIG];
 
 
 /******************************
@@ -204,6 +212,115 @@ struct Debug {
 };
 #endif
 
+/*************************
+ * Digital pulse reading *
+ *************************/
+
+struct DigitalPulses {
+// Right now customized to read the DHT22 pulse signal as described in the
+// Aosong Electronics manual
+  byte slot;
+  byte pin;
+  byte pulse;
+  bool active;
+  bool errored;
+  bool v_was_hi;
+  bool v_goal_hi;
+  Dura next_t;
+  Dura max_t;
+  uint64_t bits;
+
+  void clear() {
+    bits = 0;
+    active = false;
+    errored = false;
+    for (int i = 0; i < DIG; i++) dpi_buffer[i] = 0;
+  }
+
+  void init(byte my_slot, byte my_pin, Dura &now) {
+    slot = my_slot;
+    pin = my_pin;
+    pulse = -3;
+    next_t = now;
+    v_was_hi = false;
+    active = true;
+    v_was_hi = false;
+    errored = false;
+    bits = 0;
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    next_t += MHZ*1200;
+    max_t = next_t;
+    max_t += MHZ*8800;  // Whole protocol should complete within 10 ms.  Actually less: readout is < 5 ms.
+  }
+
+  void run(Dura &now) {
+    if (!active || errored || max_t < now) return;
+    if (pulse < 0) {
+      if (pulse == -3) {
+        if (next_t < now) {
+          pinMode(pin, INPUT);
+          pulse = -2;
+          v_goal_hi = false;
+          max_t = now;
+          next_t = now;
+          next_t += MHZ*60;
+          max_t += MHZ*(70+50)*60;
+        }
+      }
+      else {
+        bool is_hi = (digitalRead(pin) == HIGH);
+        if (is_hi != v_goal_hi) {
+          next_t = now;
+          next_t += MHZ*60;
+        }
+        else if (next_t < now) {
+          pulse += 1;
+          v_goal_hi = !v_goal_hi;
+          next_t = now;
+          next_t += (pulse < 0) ? MHZ*60 : MHZ*35;
+        }
+      }
+    }
+    else {
+      bool is_hi = (digitalRead(pin) == HIGH);
+      if (!v_goal_hi) {
+        if (is_hi) {
+          next_t = now;
+          next_t += MHZ*35;
+        }
+        else if (next_t < now) {
+          v_goal_hi = true;
+          next_t = now;
+          next_t += MHZ*15;
+        }
+      }
+      else {
+        if (!is_hi) {
+          if (next_t < now) {
+            v_goal_hi = false;
+            next_t += MHZ*40;
+            if (next_t < now) bits |= (((uint64_t)1) << pulse);
+            pulse += 1;
+            if (pulse >= 40) {
+              active = false;
+              dpi_buffer[slot] = bits;
+            }
+            else {
+              next_t = now;
+              next_t += MHZ*35;
+            }
+          }
+          else {
+            next_t = now;
+            next_t += MHZ*15;
+          }
+        }
+      }
+    }
+  }
+};
+
 /************************
  * Protocol information *
  ************************
@@ -221,7 +338,7 @@ struct Protocol {
   Dura p;    // Pulse time (or period, for analog)
   Dura q;    // Pulse off time (analog: amplitude 0-2047)
   byte i;    // Invert? 'i' == yes, otherwise no
-  byte j;    // Shape: 'l' = sinusoidal, 'r' = triangular, other = digital
+  byte j;    // Shape: 'l' = sinusoidal, 'r' = triangular, `|` = digital pulse read, other = standard digital out
   byte next; // Number of next protocol, 255 = none
   byte chan; // Channel number, 255 = none
 
@@ -391,7 +508,7 @@ struct Channel {
 
   bool alive() { return runlevel != C_ZZZ && who != 255; }
 
-  Dura advance(Dura d, Protocol *ps) {
+  Dura advance(Dura d, Protocol *ps, DigitalPulses *pulsar) {
     bool started_yn = false;
     bool started_pq = false;
 tail_recurse:
@@ -423,6 +540,7 @@ tail_recurse:
     }
     else {
       // Relevant times are c->t, c->yn, and c->pq
+      pulsar->run(d);
       bool pq_first = (pq < yn) && (pq < t);
       bool yn_first = !pq_first && (yn < t);
       Dura *x = pq_first ? &pq : (yn_first ? &yn : &t);
@@ -463,9 +581,9 @@ tail_recurse:
     }
   }
 
-  static void init(Channel *cs){ for (int i = 0; i < CHAN; i++) cs[i].init(i); }
+  static void init(Channel *cs, DigitalPulses *pulsar){ pulsar->clear(); for (int i = 0; i < CHAN; i++) cs[i].init(i); }
 
-  static void refresh(Channel *cs, Protocol *ps) { for (int i = 0; i < CHAN; i++) cs[i].refresh(ps); }
+  static void refresh(Channel *cs, Protocol *ps, DigitalPulses *pulsar) { pulsar->clear(); for (int i = 0; i < CHAN; i++) cs[i].refresh(ps); }
 
   static void solo(Channel *cs, int it, Protocol *ps, int &pi) {
     for (int i = 0; i < CHAN; i++) {
@@ -497,7 +615,11 @@ Channel channels[CHAN];
 Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 128, 255, 255, {0, 0, 0, 0, 0, 0, {0, 0}, {0, 0}}};
 
 
+/****************************
+ * Analog signal generation *
+ ****************************/
 
+// TODO
 
 
 /*****************************************
@@ -591,7 +713,11 @@ void drain_to_buf() {
 #ifdef YELL_DEBUG
     int old = bufi;
 #endif
-    while ((av--) > 0 && bufi < BUFN) buf[bufi++] = Serial.read();
+    while ((av--) > 0 && bufi < BUFN) {
+      byte c = Serial.read();
+      buf[bufi++] = c;
+      if (c == '\n') break;
+    }
 #ifdef YELL_DEBUG
     yell2ib(old, bufi, buf);
 #endif
@@ -749,6 +875,8 @@ volatile int runlevel;   // -2 error; -1 stopping to error; 0 ran; 1 accepting c
 volatile int alive;      // Number of channels alive and running
 
 volatile bool led_is_on;
+
+struct DigitalPulses pulsar;
 
 void error_with_message(const char* what, int n, const char* detail, int m) {
   if (erri == 0) {
@@ -1072,7 +1200,7 @@ void process_error_command() {
   }
   // Was a fixed-length command.  Pick out the meaningful ones.
   switch(buf[1]) {
-    case '@': Serial.write("~!", 2); Serial.send_now(); break;
+    case '@': Serial.write("~!\n", 3); Serial.send_now(); break;
     case '.': process_reset(); break;
     case '\'': process_say_empty(); break;
     case '#': tell_msg(); break;
@@ -1090,7 +1218,7 @@ void process_complete_command() {
     return;
   }
   switch(buf[1]) {
-    case '@': Serial.write("~/"); Serial.send_now(); break;
+    case '@': Serial.write("~/\n", 3); Serial.send_now(); break;
     case '.': process_reset(); break;
     case '"': process_refresh(); break;
     case '#': process_say_the_time(); break;
@@ -1099,7 +1227,7 @@ void process_complete_command() {
     case '\'': process_say_empty(); break;
     case '^': if (!process_drift_command()) return; break;
     default:
-      if (buf[1] >= 'A' && buf[1] <= 'Z' && buf[1] != 'Y') {
+      if (buf[1] >= 'A' && buf[1] <= 'Z') {
         if (bufi < 3) return;
         if (buf[2] == '/') { discard_buf(3); return; }
         else if (buf[2] == '?') { process_say_the_voltage(buf[1]); return; }
@@ -1136,7 +1264,7 @@ void process_init_command() {
     byte ch = b;
     b = buf[2];
     switch(b) {
-      case '@': Serial.write("~."); Serial.send_now(); break;
+      case '@': Serial.write("~.\n", 3); Serial.send_now(); break;
       case '?': process_say_the_voltage(ch); break;
       case '*': process_start_running(ch); break;
       case '/': break;
@@ -1234,7 +1362,7 @@ void process_runtime_command() {
   }
   else {
     switch(b) {
-      case '@': Serial.write("~*"); Serial.send_now(); break;
+      case '@': Serial.write("~*\n", 3); Serial.send_now(); break;
       case '.': process_reset(); break;
       case '#': process_say_the_time(); break;
       case '?': tell_who(); break;

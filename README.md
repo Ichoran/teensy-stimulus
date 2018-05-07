@@ -1,14 +1,16 @@
 # Ticklish
 
-Ticklish allows Teensy 3.1 boards to provide stimulus trains suitable for animal behavior experiments.
+Ticklish allows Teensy 3.2 boards to provide stimulus trains suitable for animal behavior experiments.
+
+_Note: Ticklish version 1 is available in the `v1` branch!_
 
 ## Overview
 
 Ticklish allows a Teensy 3-series board to function as a simple stimulus generator.  It listens for commands via serial-over-USB, then executes them.  It has a time resolution of 1 microsecond (target accuracy 100 microseconds), a maximum protocol length of 100,000,000 seconds, and can run up to 24 digital output channels and one analog output channel (for sinewaves or triangle waves of frequencies up to 1 KHz).
 
-You can also query the voltage of analog-capable pins not used for output, or the high/low state of digital-capable pins not used for output.  Neither the LED pin nor the analog-out pin can be queried.
+You can also query the voltage of analog-capable pins not used for output, or the high/low state of digital-capable pins not used for output.  It can also read pulse-series off of a single digital-capable pin at a time.  Neither the LED pin nor the analog-out pin can be queried.
 
-The project also contains code to interface with the Teensy in a variety of languages (presently, Scala, C, and LabView).  See the README files in the directories corresponding to each language to learn more.
+The project contains code to interface with the Teensy in a variety of languages (presently, Scala, C, Rust, Python, and LabView).  See the README files in the directories corresponding to each language to learn more.
 
 ## Constructing Stimuli
 
@@ -16,7 +18,7 @@ A stimulus protocol consists of one or more **stimulus trains** which execute se
 
 Digital stimuli consist of repeated **pulse on** and **pulse off** blocks.  Analog stimuli consist of a **frequency** and an **amplitude**.
 
-Due to the limitations of the Teensy 3.1 analog/digital outputs, one cannot mix analog and digital outputs on the same channel.  Furthermore, a maximum of 254 stimulus trains may be used across all output channels.
+Due to the limitations of the Teensy 3.2 analog/digital outputs, one cannot mix analog and digital outputs on the same channel.  Furthermore, a maximum of 254 stimulus trains may be used across all output channels.
 
 TODO: example picture goes here.
 
@@ -24,35 +26,37 @@ TODO: example picture goes here.
 
 Ticklish has a simple serial protocol for communications.
 
-A fixed-length command starts with the symbol `~`.  The following byte or bytes determine how long the command is (content-dependent).  There is only a single variable-length command, which starts with `$` and ends with `\n` (newline).
+All commands start with either `~` or `$`, and all commands end with `\n` (newline).  Ticklish uses the same protocol for replying.
 
-Returned values start with the symbol `~` if they are fixed-length.  A variable-length return value is also possible; this will start with `$` and end with `\n`.
+Fixed-length commands start with `~`, while variable-length commands start with `$`; fixed-length answers start with `~` while variable-length answers start with `$`.  Only some commands evoke a reply.  All replies are in direct response to a command--there are no asynchronous/delayed responses.
 
 The symbols ~, $, and `\n` (newline) will ONLY appear at the beginning (`~`, `$`) and/or end (`\n`) of a command.  No escape sequences are permitted; if one of the above characters needs to be returned it will be replaced with underscore `_`.
 
 No command or return value may be longer than 60 bytes in addition to the starting `$` and ending `\n` if any.  Thus, the longest possible message is 62 bytes.  This constraint is to ensure that the command fits safely within one 64-byte USB packet sent/received by the board.
 
+**From this point on, the ending `\n` will be omitted from all command and reply strings listed in this document.  Ensure that your code expects and sends `\n` as appropriate!**
+
 ### Identifying a Ticklish device
 
-If you send the command `~?`, a Ticklish device will respond with a string that starts with `$Ticklish1.0 ` (the version number may be later) plus a device-specific identifying string, followed by `\n`.  The string will be at most 60 characters long not counting `$` and `\n`, but may be shorter.
+If you send the command `~?`, a Ticklish device will respond with a string that starts with `$Ticklish2.0 ` (the version number may be later) plus a device-specific identifying string, followed by `\n`.  The string will be at most 60 characters long not counting `$` and `\n`, but may be shorter.
 
 ### Output channels
 
-Each digital output channel is identified by a capital letter that refers to its pin number.  Pins 14 through 23 are lettered `A` through `J`; pins 0 through 13 continue with `K` through `X`.  Note that `X` is the Teensy 3.1 LED pin.  Note also that case is important: lower case letters do **not** refer to output channels.
+Each digital output channel is identified by a capital letter that refers to its pin number.  Pins 14 through 23 are lettered `A` through `J`; pins 0 through 13 continue with `K` through `X`.  Note that `X` is the Teensy 3.2 LED pin.  Note also that case is important: lower case letters do **not** refer to output channels.
 
-The analog output channel is specified by `Z` and is on pin A14/DAC.
+The analog output channel is specified by `Z` and is on pin A14/DAC for a Teensy 3.2; for Teensy 3.5 and 3.6, the channels are `Z` for A21/DAC0 and `Y` for A22/DAC1.
 
 Note that pins do not turn on precisely simultaneously even if scheduled at the same time.  Lower-lettered pins turn on before higher-lettered ones; the latency between each pin state change and the next is at most a few microseconds, but if timing of that precision is important, you should measure it and not take the simultaneity for granted.
 
 ### Input channels
 
-Pins `A` through `J` can read analog voltage (0-5V) if not being used for output.  Pins `K` through `W` can read digital state (reported as 0.000 or 5.000 voltage).  Pins `X` and `Z` cannot be used for reading.
+Pins `A` through `J` can read analog voltage (0-5V) if not being used for output.  Pins `K` through `W` can read digital state (reported as 0.000 or 5.000 voltage) or can read the timing of pulse trains.  Pins `X`, `Y`, and `Z` cannot be used for reading.
 
 ### Durations and Other Numbers
 
-Ticklish measures all times in seconds.  A _duration_ is given by eight decimal digits including an optional decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.0000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
+Ticklish measures all times in seconds.  A _duration_ is given by eight characters: either eight decimal digits, or seven decimal digits and a single decimal point `.`.  A leading zero is required for times less than one second, and all values must be padded with zeros to reach eight total characters.  Thus, `0.000001` is the shortest non-zero time possible and `99999999` is the longest (about three years); `1.000000` and `00000001` are two different ways to specify one second.
 
-Note also that the internal clock on the Teensy 3.1 is not accurate to one part in a hundred million (or even one in a million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.
+Note also that the internal clock on the Teensy 3.2 is not accurate to one part in a hundred million (or even one in a million).  Synchronization should not be performed by dead reckoning alone, but by querying the internal clock of the Teensy.  There is also a synchronization-compensation feature.
 
 ### Specifying a Stimulus Train
 
@@ -107,7 +111,7 @@ An annotated example is given below.
  \-------------------------------------------------------- Output channel specifier
 ```
 
-Analog stimuli must be set piece by piece.  Digital stimuli that are set all at once can be modified by further commands (to invert polarity, for instance).
+Analog stimuli must be set piece by piece.  Digital stimuli that are set all at once can be modified by further commands.
 
 To immediately run the command on that single channel, discarding all other settings, use `:` in place of `=`.  (This only works when the system is not already running.)
 
@@ -115,7 +119,7 @@ To immediately run the command on that single channel, discarding all other sett
 
 Stimulus trains can be chained one after another.  To add a new train after the existing specified one, use `&`, e.g. `~A&`.  All commands regarding this output pin will apply only to the new train after this command executes.  The new train will be initialized with zero values (so you had better set them), and will begin executing as soon as the time on the previous train elapses.
 
-A maximum of 254 trains can be stored across all pins.  Each of the 25 initial pins reserves one train to begin with, leaving 229 free for extensions.
+A maximum of 254 trains can be stored across all pins.  Each of the 26 initial pins reserves one train to begin with, leaving 228 free for extensions.
 
 ### Error States
 
@@ -160,13 +164,27 @@ You can get timing information during a run with the `#` command.  This can be u
 ~^+12345678.
 ```
 
-Use `+` and `-` to indicate sign (symbol is mandatory).  All zeros indicates no drift correction. Use `!`  instead of `.` to write to EEPROM so the same delay will be used next time.  Use `?` to not even set the drift, just query the existing one.  Use `^` instead of `!` to read the previously-saved EEPROM value instead of using the one passed in.
+Use `+` and `-` to indicate sign (symbol is mandatory).  All zeros indicates no drift correction. Use a trailing `!` instead of `.` to write to EEPROM so the same delay will be used next time.  Use `~^?` to query the existing drift.  Use `~^^` to read the previously-saved EEPROM value instead of using the one passed in.
 
-The board replies with the previous delay value using the same format, except it uses `.` at the end if the new value was not written and `!` if it was; if it was a query or a read-from-EEPROM, and the new value is not the same as the old, it will reply with `?` instead of `.`.  When requesting a read from EEPROM, the "old" value is the EEPROM value, not the memory value from before the request.
+The board replies with the previous delay value using the same format, except it uses `.` at the end if the new value was not written and `!` if it was.
 
 Note that times will be reported as corrected by the drift factor, so you cannot directly compute a new drift correction when an old one is in place.
 
 Drift can be set at any time except in an error state, and will take effect immediately.
+
+### Analog and digital input
+
+#### Instantaneous measurement
+
+An analog-capable pin (`A` through `J`) will report its voltage if queried with `~A?`.  The return string will be `~D.DDD` (a leading decimal, a decimal point, and three more decimal digits) specifying the voltage.  If it is a digital pin, the values will be either `0.000` or `5.000`; analog pins will be graded.
+
+Making an instantaneous measurement is supported at any time (except when in an error state), but cannot be made on a pin running a stimulus protocol.
+
+#### Digital pulse input measurement
+
+Digital pins `K` through `W` can be used--at most one at a time--to read digital pulse train input.  For now, only the DHT22 temperature/humidity sensor format is enabled.  Execute the command `~K|<` to turn on digital input on pin `K` for a particular stimulus protocol.  Then, instead of actually delivering a stimulus, the board will let the pin float as input most of the time; whenever the pin would normally be turned on, it will instead run a trigger and read stimulus, after which the digital pulse train will be stored in a buffer.
+
+To retrieve the buffer, use `~K|?`.  Ticklish will respond with `$K|0123456789` where the numbers are hex-encoded bits, least signficant bit first.  If the measurement has not been made, the reply will be `$K|`.
 
 ## Visual feedback
 
@@ -180,9 +198,9 @@ While a stimulus protocol is running, the LED will be off by default.  If there 
 
 When a stimulus protocol has finished, the LED will flash briefly once every three seconds.
 
-## Loading the Ticklish program onto a Teensy 3.1 or later board
+## Loading the Ticklish program onto a Teensy 3.2 or later board
 
-If you use the Arduino IDE with the standard loader, you should be able to simply run the IDE, compile with control-R, and press the button on the Teensy to load the program.
+If you use the Arduino IDE with the standard loader, you should be able to simply run the IDE, compile with control-R, and press the button on the Teensy to load the program.  If the board is running at a rate other than 72 MHz, you will need to redefine the `MHZ` and `HTZ` defines.
 
 ## Implementation Details
 
@@ -218,7 +236,7 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 
 *The command string starts with `~` and is followed by a single command char.*
 
-#### No Parameters
+#### No parameters
 
 |  Command  | Char| Result?     | Additional Description |
 |-----------|-----|-------------|------------------------|
@@ -231,17 +249,20 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 | Identity  | `?` | 10-62 chars | `$Ticklish1.0 ` + message + `\n` |
 | Ping      | `'` | 2 chars     | `$\n` (empty variable-length reply) |
 
-#### With Parameters
+#### With parameters or multiple command characters
 
-| Command               |Char | Parameter                   | Result?      | Additional Description |
+| Command               |Chars | Parameter                   | Result?      | Additional Description |
 |-----------------------|-----|-----------------------------|--------------|------------------------|
-| Set drift             | `^` | 10 chars: +-, 8 digits, .?! | as parameter | Sets 1/n drift; replies with previous drift |
+| Set drift             | `^+` | 8 digits + `.` or `!` | `^+NNNNNNNN` | Sets 1/n drift (too slow); replies with previous |
+| Set drift             | `^-` | 8 digits + `.` or `!` | `^+NNNNNNNN` | Sets 1/n drift (too fast); replies with previous |
+| Query drift setting   | `^?` | None                  | `^+NNNNNNNN` | Gives current drift value |
+| Set drift from EEPROM | `^^` | None                  | `^+NNNNNNNN` | Also returns EEPROM drift value |
 
-### Channel-Dependent Commands
+### Channel-dependent commands
 
 *The command string starts with `~`, followed by channel number: `A` to `X` are digital channels; `Z` is analog.*
 
-#### No Parameters
+#### No parameters
 
 *The command start character and channel number are followed by a single command character.*
 
@@ -258,7 +279,7 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 | Append train    | `&` | None     | Adds a new stimulus train to follow the existing one. |
 | Query voltage   | `?` | 6 chars  | `~` followed by voltage in `D.DDD` format (5 digits) |
 
-#### With Parameters
+#### With parameters
 
 *The command start character and channel number are followed by a command character and a parameter (specified below).*
 
@@ -274,6 +295,8 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 | Set amplitude         | `a` | 4 chars: ampl.    | None    | Analog channels only.  Values from 0 to 2047. |
 | Set full protocol     | `=` | 54 chars: 6x8 +etc| None    | Digital channels only. |
 | Set and run protocol  | `:` | 54 chars: as `=`  | None    | Clears all other protocols. |
+| Read digital pulses   | `|` | `<` or `>`        | None    | `<` means actually read them (`>` is output like normal) |
+| Query stored pulses   | `|` | `?`               | `$02468ace13` | Bits read as pulses |
 
 ### Allowed Commands by State
 
@@ -301,20 +324,23 @@ Possible states:
 | `~A#` | `CR`   | returns all zeros |
 | `~Au` | `P`    | error |
 | `~Ai` | `P`    | error |
-| `~Zl` | `P`    | error (including if not `Z`) |
-| `~Zr` | `P`    | error (including if not `Z`) |
+| `~Zl` | `P`    | error (including if not `Z` or `Y`) |
+| `~Zr` | `P`    | error (including if not `Z` or `Y`) |
 | `~A&` | `P`    | error |
 | `~At` | `P`    | error |
 | `~Ad` | `P`    | error |
 | `~As` | `P`    | error |
 | `~Az` | `P`    | error |
-| `~Ap` | `P`    | error (including if `Z`) |
-| `~Aq` | `P`    | error (including if `Z`) |
-| `~Zw` | `P`    | error (including if not `Z`) |
-| `~Za` | `P`    | error (including if not `Z`) |
+| `~Ap` | `P`    | error (including if `Z` or `Y`) |
+| `~Aq` | `P`    | error (including if `Z` or `Y`) |
+| `~Zw` | `P`    | error (including if not `Z` or `Y`) |
+| `~Za` | `P`    | error (including if not `Z` or `Y`) |
 | `~A=` | `P`    | error |
-| `~A:` | `P`    | error (including if `Z`) |
-| `~A?` | `CPR`  | error if running output on `A`; can't use on `X` or `Z` |
+| `~A:` | `P`    | error (including if `Z` or `Y`) |
+| `~A?` | `CPR`  | error if running output on `A`; can't use on `X`, `Y`, `Z` |
+| `~K|<`| `P`    | error (including if not `K` through `W`) |
+| `~K|>`| `P`    | error (including if not `K` through `W`) |
+| `~K|?`| `CR`   | returns empty string |
 
 
 ## Examples
@@ -371,4 +397,6 @@ Timing of stimulus train switches has not yet been measured.
 
 ## Revision Notes
 
-Ticklish is currently pre-1.0.
+Ticklish currently version 2.0.
+
+Version 1 had a slightly different control format (`\n` was not used after fixed-length commands) and somewhat fewer features.
