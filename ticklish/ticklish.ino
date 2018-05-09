@@ -180,36 +180,8 @@ struct Dura {
   }
 };
 
+Dura dpi_timing[DIG];
 
-/*****************************
- * Debugging via serial port *
- *****************************/
-
-#ifdef EXTRA_SERIAL_DEBUGGING
-#define DBUFN 128
-char dbg[DBUFN];
-
-struct Debug {
-  int dummy_field;
-  void init() { dummy_field = 0; }
-  static void shout(int line, int i, int j) { 
-    dbg[DBUFN-1] = 0;
-    snprintf(dbg, DBUFN-1, "%d: %d %d\n", line, i, j);
-    Serial.write(dbg, strlen(dbg));
-    Serial.send_now();
-  }
-  static void shout(int line, int i, int j, Dura d) { 
-    dbg[DBUFN-1] = 0;
-    snprintf(dbg, DBUFN-1, "%d: %d %d ", line, i, j);
-    int n = strlen(dbg);
-    d.write_15((byte*)dbg + n);
-    dbg[n+15] = '\n';
-    dbg[n+16] = 0;
-    Serial.write(dbg, strlen(dbg));
-    Serial.send_now();
-  }
-};
-#endif
 
 /*************************
  * Digital pulse reading *
@@ -220,7 +192,7 @@ struct DigitalPulses {
 // Aosong Electronics manual
   byte slot;
   byte pin;
-  byte pulse;
+  short pulse;
   bool active;
   bool errored;
   bool v_was_hi;
@@ -233,7 +205,10 @@ struct DigitalPulses {
     bits = 0;
     active = false;
     errored = false;
-    for (int i = 0; i < DIG; i++) dpi_buffer[i] = 0;
+    for (int i = 0; i < DIG; i++) {
+      dpi_buffer[i] = 0;
+      dpi_timing[i] = (Dura){0, 0};
+    }
   }
 
   void init(byte my_slot, byte my_pin, Dura &now) {
@@ -248,6 +223,8 @@ struct DigitalPulses {
     bits = 0;
     pinMode(pin, OUTPUT);
     digitalWrite(pin, LOW);
+    dpi_buffer[my_slot] = 0;
+    dpi_timing[slot] = now;
     next_t += MHZ*1200;
     max_t = next_t;
     max_t += MHZ*8800;  // Whole protocol should complete within 10 ms.  Actually less: readout is < 5 ms.
@@ -255,11 +232,14 @@ struct DigitalPulses {
 
   void run(Dura &now) {
     if (!active || errored || max_t < now) return;
+    dpi_timing[slot+1] = now;
     if (pulse < 0) {
+      dpi_timing[slot+2] = now;
       if (pulse == -3) {
         if (next_t < now) {
           pinMode(pin, INPUT);
-          pulse = -2;
+          pulse = 0;//-2;
+          dpi_timing[slot+3] = now;
           v_goal_hi = false;
           max_t = now;
           next_t = now;
@@ -268,6 +248,7 @@ struct DigitalPulses {
         }
       }
       else {
+        dpi_timing[slot+4] = now;
         bool is_hi = (digitalRead(pin) == HIGH);
         if (is_hi != v_goal_hi) {
           next_t = now;
@@ -282,7 +263,18 @@ struct DigitalPulses {
       }
     }
     else {
+      dpi_timing[slot+5] = now;
       bool is_hi = (digitalRead(pin) == HIGH);
+      if (is_hi != v_goal_hi) {
+        bits |= (((uint64_t)1) << pulse);
+        v_goal_hi = is_hi;
+        if (pulse >= 40) {
+          active = false;
+          dpi_buffer[slot] = bits;
+        }
+        else pulse += 1;
+      }
+      /*
       if (!v_goal_hi) {
         if (is_hi) {
           next_t = now;
@@ -316,6 +308,7 @@ struct DigitalPulses {
           }
         }
       }
+      */
     }
   }
 };
@@ -342,6 +335,18 @@ struct Protocol {
   byte chan; // Channel number, 255 = none
 
   void init() { *this = {{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, 'u', ' ', 255, 255}; }
+
+  void write(byte* target) {
+    t.write_8(target); target[8] = ';'; target += 9;
+    d.write_8(target); target[8] = ';'; target += 9;
+    s.write_8(target); target[8] = ';'; target += 9;
+    z.write_8(target); target[8] = ';'; target += 9;
+    p.write_8(target); target[8] = ';'; target += 9;
+    q.write_8(target);                  target += 8;
+    target[0] = i;
+    target[1] = j;
+    target[2] = '\n';
+  }
 
   // Parse one duration given by a label
   bool parse_labeled(byte label, byte *input) {
@@ -409,30 +414,6 @@ Protocol not_a_protocol = (Protocol){{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0,
  *********************************
 **/
 
-struct ChannelError {
-  int nstim;     // Number of stimuli scheduled to start
-  int smiss;     // Number of stimuli missed entirely
-  int npuls;     // Number of pulses scheduled to start
-  int pmiss;     // Number of pulses missed entirely
-  int emax0;     // Biggest absolute error in pulse start timing (clock ticks)
-  int emax1;     // Biggest absolute error in pulse end timing (clock ticks)
-  Dura toff0;    // Total error in pulse start timing
-  Dura toff1;    // Total error in pulse end timing  
-
-  void write(byte *target) {
-    int ns = (nstim > 999999999 || nstim < 0) ? 999999999 : nstim;
-    int sm = (smiss > 999999 || smiss < 0) ? 999999 : smiss;
-    int np = (npuls > 999999999 || npuls < 0) ? 999999999 : npuls;
-    int pm = (pmiss > 999999 || pmiss < 0) ? 999999 : pmiss;
-    int e0 = emax0 / MHZ; e0 = (e0 > 99999 || e0 < 0) ? 99999 : e0;
-    int e1 = emax1 / MHZ; e1 = (e1 > 99999 || e1 < 0) ? 99999 : e1;
-    int64_t t0 = toff0.as_us(); t0 = (t0 > 9999999999ll || t0 < 0) ? 9999999999ll : t0;
-    int64_t t1 = toff1.as_us(); t1 = (t1 > 9999999999ll || t1 < 0) ? 9999999999ll : t1;
-    snprintf((char*)target, 60, "%09d%06d%09d%06d%05d%05d%10lld%10lld", ns, sm, np, pm, e0, e1, t0, t1);
-  }
-};
-
-
 #define C_ZZZ 0
 #define C_WAIT 1
 #define C_LO 2
@@ -452,17 +433,29 @@ struct Channel {
   byte pin;       // The digital pin number for this output, or 255 = analog out
   byte who;       // Which protocol we're running now, 255 = none
   byte zero;      // Initial protocol to start at (used only for resetting), 255 = none
-  ChannelError e; // Error statistics
 
   void init(int index) {
-    *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 0, 255, 255, {0, 0, 0, 0, 0, 0, 0, 0} };
+    *this = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 0, 255, 255 };
     pin = (index < DIG) ? digi[index] : 255;
     zero = 255;
     if (index < DIG && assume_in[index]) pinMode(index, INPUT);
   }
 
+  void write(byte* target) {
+    if (runlevel == 0) {
+      if (who == 255) strncpy((char*)target, "unused\n", 8);
+      else protocols[who].write(target);
+    }
+    else {
+      target[0] = '*'; target += 1;
+      t.write_8(target);  target[8] = ';'; target += 9;
+      yn.write_8(target); target[8] = ';'; target += 9;
+      pq.write_8(target); target[8] = ';'; target += 9;
+      snprintf((char*)target, 10, ";%03d,%03d\n", pin, who);
+    }
+  }
+
   void refresh(Protocol *ps) {
-    e = (ChannelError){0, 0, 0, 0, 0, 0, 0, 0};
     t = yn = pq = (Dura){0, 0};
     runlevel = C_ZZZ; // Debug::shout(__LINE__, pin, runlevel);
     who = zero;
@@ -473,25 +466,34 @@ struct Channel {
   void pin_high() { if (who != 255) digitalWrite(pin, HIGH); }
 
   void pin_off(Protocol *ps) {
-    if (who != 255) {
+    if (who != 255 && ps[who].j != '|') {
       if (ps[who].i == 'i') digitalWrite(pin, HIGH);
       else                  digitalWrite(pin, LOW);
     }
   }
-  void pin_on(Protocol *ps) {
+  bool pin_on(Protocol *ps, DigitalPulses *pulsar, Dura &now, byte slot) {
     if (who != 255) {
-      if (ps[who].i == 'i') digitalWrite(pin, LOW);
-      else                  digitalWrite(pin, HIGH);
+      if (ps[who].j == '|') {
+        if (pulsar->active) return false;
+        pulsar->init(slot, pin, now);
+      }
+      else if (ps[who].i == 'i') digitalWrite(pin, LOW);
+      else                       digitalWrite(pin, HIGH);
     }
+    return true;
   }
 
   bool run_next_protocol(Protocol *ps, Dura d) {
     Protocol *p = ps + who;
-    pin_off(p);
+    if (p->j != '|') pin_off(p);
     who = p->next;
     if (who < 255) {
       p = ps + who;
-      pin_off(p);
+      if (p->j == '|') pinMode(pin, INPUT);
+      else {
+        pinMode(pin, OUTPUT);
+        pin_off(p);
+      }
       runlevel = C_WAIT; // Debug::shout(__LINE__, pin, runlevel, d);
       t = p->t; t += d;
       yn = p->d; yn += d;
@@ -507,7 +509,7 @@ struct Channel {
 
   bool alive() { return runlevel != C_ZZZ && who != 255; }
 
-  Dura advance(Dura d, Protocol *ps, DigitalPulses *pulsar) {
+  Dura advance(Dura d, Protocol *ps, DigitalPulses *pulsar, byte slot) {
     bool started_yn = false;
     bool started_pq = false;
 tail_recurse:
@@ -518,20 +520,17 @@ tail_recurse:
       if (d < *x) return *x;
       else {
         if (yn < t) {
-          pin_on(ps);
+          if (!pin_on(ps, pulsar, d, slot)) return (Dura){-1, -1};
           started_yn = true;
           started_pq = true;
           runlevel = C_HI; // Debug::shout(__LINE__, pin, runlevel, d);
           pq = yn; pq += ps[who].p;
           yn += ps[who].s;
-          e.nstim++;
-          e.npuls++;
-          // TODO--timing errors here!
         }
         else {
           pin_low();
-          if (started_yn) { started_yn = false; e.smiss++; }
-          if (started_pq) { started_pq = false; e.pmiss++; }
+          started_yn = false;
+          started_pq = false;
           run_next_protocol(ps, t);
         }
         goto tail_recurse;   // Functionally: return advance(d, ps, started_yn, started_pq);      
@@ -539,7 +538,7 @@ tail_recurse:
     }
     else {
       // Relevant times are c->t, c->yn, and c->pq
-      //pulsar->run(d);
+      pulsar->run(d);
       bool pq_first = (pq < yn) && (pq < t);
       bool yn_first = !pq_first && (yn < t);
       Dura *x = pq_first ? &pq : (yn_first ? &yn : &t);
@@ -547,32 +546,30 @@ tail_recurse:
       else {
         if (pq_first) {
           if (runlevel == C_LO) {
-            pin_on(ps);
+            if (!pin_on(ps, pulsar, d, slot)) return (Dura){-1, -1};
             started_pq = true;
             runlevel = C_HI; // Debug::shout(__LINE__, pin, runlevel, d);
             pq += ps[who].p;
-            e.npuls++;
-            // TODO--timing errors here!
           }
           else {
             pin_off(ps);
             runlevel = C_LO;
             pq += ps[who].q;
-            if (started_pq) { started_pq = false; e.pmiss++; }
+            if (started_pq) started_pq = false;
           }
         }
         else if (yn_first) {
           if (runlevel == C_HI) pin_off(ps);
           runlevel = C_WAIT; // Debug::shout(__LINE__, pin, runlevel, d);
           yn += ps[who].z;
-          if (started_pq) { started_pq = false; e.pmiss++; }
-          if (started_yn) { started_yn = false; e.smiss++; }
+          if (started_pq) started_pq = false;
+          if (started_yn) started_yn = false;
         }
         else {
           // t exhausted
           pin_low();
-          if (started_yn) { started_yn = false; e.smiss++; }
-          if (started_pq) { started_pq = false; e.pmiss++; }
+          if (started_yn) started_yn = false;
+          if (started_pq) started_pq = false;
           run_next_protocol(ps, t);
         }
         goto tail_recurse;
@@ -605,7 +602,8 @@ tail_recurse:
     int a = 0;
     for (int i = 0; i < DIG; i++) if (cs[i].alive()) {
       a += 1;
-      Dura y = cs[i].advance(d, ps, pulsar);
+      Dura y = cs[i].advance(d, ps, pulsar, (byte)i);
+      if (!y.is_valid()) return y;
       if (!y.is_empty()) {
         if (x.is_empty() || y < x) x = y;
       }
@@ -617,7 +615,7 @@ tail_recurse:
 };
 
 Channel channels[CHAN];
-Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 128, 255, 255, {0, 0, 0, 0, 0, 0, {0, 0}, {0, 0}}};
+Channel not_a_channel = (Channel){ {0, 0}, {0, 0}, {0, 0}, C_ZZZ, 128, 255, 255 };
 
 
 /****************************
@@ -869,7 +867,11 @@ void go_go_go() {
       if (c->who == 255) continue;
       alive += 1;
       Protocol *p = protocols + c->who;
-      c->pin_off(p);
+      if (p->j == '|') pinMode(c->pin, INPUT);
+      else {
+        pinMode(c->pin, OUTPUT);
+        c->pin_off(p);
+      }
       c->t = p->t;
       c->yn = p->d;
       c->runlevel = C_WAIT; // Debug::shout(__LINE__, c->pin, c->runlevel);
@@ -893,6 +895,7 @@ bool run_iteration() {
   // Can't pass volatile as reference, so buffer it
   int living = alive;
   next_event = Channel::advance(channels, global_clock, protocols, &pulsar, living);
+  if (!next_event.is_valid()) error_with_message("Attempt to read two or more digital pulse trains at once");
   alive = living;
   return alive != 0;
 }
@@ -1070,7 +1073,7 @@ int process_get_analog(int channel) {
 }
 
 void process_say_the_voltage(char ch) {
-  if (ch == 'X' || ch == 'Z') error_with_message("Cannot ever read input on this channel: ", ch);
+  if (ch == 'X' || ch == 'Y' || ch == 'Z') error_with_message("Cannot ever read input on this channel: ", ch);
   else {
     Channel *c = process_get_channel(ch);
     if (c->zero != 255) error_with_message("Channel voltage request not valid because running on: ", ch);
@@ -1125,6 +1128,32 @@ bool process_drift_command() {
   return true;
 }
 
+void process_channel_status_command(byte ch) {
+  msg[0] = '$';
+  process_get_channel(ch)->write(msg+1);
+  msg[62] = 0;
+  Serial.write((char*)msg);
+  Serial.send_now();
+}
+
+void process_channel_read_command(byte ch) {
+  msg[0] = '$';
+  snprintf((char*)msg+1, 12, "%010llX", dpi_buffer[ch - 'A']);
+  msg[11] = '\n';
+  msg[12] = 0;
+  Serial.write(msg, 12);
+  Serial.send_now();
+}
+
+void process_channel_time_command(byte ch) {
+  msg[0] = '$';
+  dpi_timing[ch - 'A'].write_15(msg+1);
+  msg[16] = '\n';
+  msg[17] = 0;
+  Serial.write(msg, 17);
+  Serial.send_now();
+}
+
 void process_error_command() {
   if (bufi < 2 || buf[0] != '~') return;
   // Was a fixed-length command.  Pick out the meaningful ones.
@@ -1157,7 +1186,16 @@ void process_complete_command() {
     default:
       if (buf[1] >= 'A' && buf[1] <= 'Z' && bufi > 2) {
         if (buf[2] == '/') return;
+        else if (buf[2] == '#') { process_channel_status_command(buf[1]); return; }
         else if (buf[2] == '?') { process_say_the_voltage(buf[1]); return; }
+        else if (buf[2] == '|') {
+          if      (bufi == 4 && buf[3] == '?') process_channel_read_command(buf[1]);
+          else if (bufi == 4 && buf[3] == '#') process_channel_time_command(buf[1]);
+          else {
+            error_with_message("Digital pulse command while complete (not a read): ", (char*)buf, 4);
+          }
+          return;
+        }
       }
       error_with_message("Command not valid (run complete): ", (char*)buf, 2);
   }
@@ -1181,10 +1219,22 @@ void process_init_command() {
     b = buf[2];
     switch(b) {
       case '@': Serial.write("~.\n", 3); Serial.send_now(); break;
+      case '#': process_channel_status_command(ch); break;
       case '?': process_say_the_voltage(ch); break;
       case '*': process_start_running(ch); break;
       case '/': break;
       case '&': process_new_protocol(ch); break;
+      case '|':
+        if (ch < 'K' || ch > 'W') error_with_message("Digital pulse read on channel outside of K-W: ", (char*)buf+1, 1);
+        else if (bufi < 4) error_with_message("| without > or < or ?");
+        else if (buf[3] == '<') process_ensure_protocol(ch)->j = '|';
+        else if (buf[3] == '>') {
+          Protocol *p = process_ensure_protocol(ch);
+          if (p->j == '|') p->j = ' ';
+        }
+        else if (buf[3] == '?') process_channel_read_command(b);
+        else if (buf[3] == '#') process_channel_time_command(b);
+        else error_with_message("Unknown digital pulse command: ", (char*)buf, 4);
       case '=':
       case ':':
         if (bufi < 57) return;
@@ -1229,7 +1279,7 @@ void process_init_command() {
   }
   else {
     switch(b) {
-      case '@': Serial.write("~.]n", 3); Serial.send_now(); break;
+      case '@': Serial.write("~.\n", 3); Serial.send_now(); break;
       case '.': process_reset(); break;
       case '#': process_say_the_time(); break;
       case '?': tell_who(); break;
@@ -1250,22 +1300,22 @@ void process_runtime_command() {
     return;
   }
   byte b = buf[1];
-  if (b >= 'A' && b <= 'Z' && b != 'Y') {
+  if (b >= 'A' && b <= 'Z') {
     if (bufi < 3) return;
     byte ch = b;
     b = buf[2];
     switch(b) {
       case '@': /* TODO */ break;
-      case '#':
-        msg[0] = '$';
-        process_get_channel(ch)->e.write(msg+1);
-        msg[61] = '\n';
-        msg[62] = 0;
-        Serial.write((char*)msg);
-        Serial.send_now();
-        break;
+      case '#': process_channel_status_command(ch); break;
       case '/': process_stop_running(ch); break;
       case '?': process_say_the_voltage(ch); break;
+      case '|':
+        if      (bufi == 4 && buf[3] == '?') process_channel_read_command(b);
+        else if (bufi == 4 && buf[3] == '#') process_channel_time_command(b);
+        else {
+          error_with_message("Digital pulse command while running that isn't read: ", (char*)buf, 4);
+        }
+        break;
       default:
         error_with_message("Channel command not valid (running): ", (char*)buf, 3);
     }
@@ -1366,6 +1416,8 @@ void loop() {
       next_event += MHZ * delta;
     }
   }
+  else if (runlevel == RUN_GO && pulsar.active) pulsar.run(global_clock);
+
   if (runlevel == RUN_TO_ERROR) analog_cooldown();
   if (!urgent || io_anyway < global_clock) {
     Dura soon = global_clock;

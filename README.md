@@ -115,11 +115,17 @@ Analog stimuli must be set piece by piece.  Digital stimuli that are set all at 
 
 To immediately run the command on that single channel, discarding all other settings, use `:` in place of `=`.  (This only works when the system is not already running.)
 
+#### Checking the Current Stimulus Train
+
+The command `~A#` when trains are being programmed will report on the current values for channel `A` in the same format as shown above, starting with `$` instead of `~A=`, with one extra character at the end which will be `|` if the channel will be used to read digital pulses, or a space otherwise.
+
 #### Chained Stimulus Trains
 
 Stimulus trains can be chained one after another.  To add a new train after the existing specified one, use `&`, e.g. `~A&`.  All commands regarding this output pin will apply only to the new train after this command executes.  The new train will be initialized with zero values (so you had better set them), and will begin executing as soon as the time on the previous train elapses.
 
 A maximum of 254 trains can be stored across all pins.  Each of the 26 initial pins reserves one train to begin with, leaving 228 free for extensions.
+
+Note that `~A#` only reports the current train.
 
 ### Error States
 
@@ -133,22 +139,8 @@ To terminate a stimulation protocol in progress, send the command `~/`.  To term
 
 To ask the board to tell what time point it is at, send the command `~#`.  If there is no error it will respond with `~12345678.123456` where elapsed duration is specified in seconds plus microseconds; if the board has started and is running it will always report at least one elapsed microsecond.  If the stimulus protocol has not yet been started or has already finished, it will return `~00000000.000000`.  If the system has encountered an error, it will return `$an error message here\n`.
 
-To query the state machine that runs an individual channel, send the command `~A@` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.  Analog stimuli will always report 1 or 3, not 2.
+To query the state machine that runs an individual channel, send the command `~A#` for channel `A` (likewise for the others).  The board will respond with `~A`, followed by a number from `'0'` to `'3'` indicating its state (0 = not running, 1 = running but stimulus off, 2 = running and stimulus is on but not in a pulse, 3 = running and stimulus is on and in a pulse).  This is then followed by a `;` and the number of the stimulus train (in three digits), counting up from 0.  Analog stimuli will always report 1 or 3, not 2.
 
-Ticklish will make a best effort to obey all the parameters set for it, but as the code does not form a hard real-time operating system, it may fail to switch at precisely the times requested.  To query an individual channel for error metrics, send the command `~A#` (for channel `A`).  It will respond with 8 numbers (after a `~`):
-
-1. The number of stimuli that should have started (9 digits)
-2. The number of stimuli that were missed (6 digits)
-3. The number of pulses that should have started (9 digits)
-4. The number of pulses that were missed (6 digits)
-5. Max error for starting a pulse, in microseconds (5 digits)
-6. Max error for ending a pulse, in microseconds (5 digits)
-7. Cumulative number of microseconds of error for starting pulses (10 digits)
-8. Cumulative number of microseconds of error for ending pulses (10 digits)
-
-Overall, the reply is 61 bytes long.  There are no separators between the characters.
-
-This data will be preserved after the run is complete.  Since this reporting is expensive and may itself induce timing errors, it is recommended to only call this between stimuli or during debugging.
 
 ### Resetting
 
@@ -246,7 +238,7 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 | Refresh   | `"` | None        | Restores protocols from prior run to use again. |
 | State?    | `@` | 2 chars     | `~*` if running, `~/` if stopped, `~.` if ready, `~!` if error |
 | Report    | `#` | 16 chars    | `$01234567.654321\n` or `$error message\n`; time == 0 if not running. |
-| Identity  | `?` | 10-62 chars | `$Ticklish1.0 ` + message + `\n` |
+| Identity  | `?` | 10-62 chars | `$Ticklish2.0 ` + message + `\n` |
 | Ping      | `'` | 2 chars     | `$\n` (empty variable-length reply) |
 
 #### With parameters or multiple command characters
@@ -270,8 +262,7 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 |-----------------|-----|----------|------------------------|
 | Run alone       | `*` | None     | Runs this output channel protocol alone.  (Must not be running.) |
 | Abort run       | `/` | None     | Turns off this output channel.  Remaining protocol (if any) continues. |
-| Check state     | `@` | 5 chars  | Run level digit, `;`, three digit train number. See text for details. |
-| Check quality   | `#` | 61 chars | 8 decimal numbers. See text for details |
+| Check state     | `#` | 55 chars | Same format as `=` command |
 | Usual polarity  | `u` | None     | Stimuli are low-to-high (digital) or waveform is normal (analog). |
 | Invert polarity | `i` | None     | Stimuli are high-to low (digital) or waveform is upside-down (analog). |
 | Sinusoidal      | `s` | None     | Analog stimulus should be sinusoidal. |
@@ -320,8 +311,7 @@ Possible states:
 | `~^`  | `CPR`  | N/A |
 | `~A*` | `P`    | error |
 | `~A/` | `R`    | ignored |
-| `~A@` | `CPR`  | N/A |
-| `~A#` | `CR`   | returns all zeros |
+| `~A#` | `CPR`  | error |
 | `~Au` | `P`    | error |
 | `~Ai` | `P`    | error |
 | `~Zl` | `P`    | error (including if not `Z` or `Y`) |
