@@ -200,6 +200,7 @@ struct DigitalPulses {
   Dura next_t;
   Dura max_t;
   uint64_t bits;
+  short who;
 
   void clear() {
     bits = 0;
@@ -221,25 +222,27 @@ struct DigitalPulses {
     v_was_hi = false;
     errored = false;
     bits = 0;
+    who = 3;
     pinMode(pin, OUTPUT);
     digitalWrite(pin, LOW);
-    dpi_buffer[my_slot] = 0;
-    dpi_timing[slot] = now;
+    dpi_buffer[slot] = 0;
     next_t += MHZ*1200;
     max_t = next_t;
-    max_t += MHZ*8800;  // Whole protocol should complete within 10 ms.  Actually less: readout is < 5 ms.
+    max_t += MHZ*6800;  // Whole protocol should complete within 8 ms.  Actually less: readout is < 5 ms.
   }
 
   void run(Dura &now) {
-    if (!active || errored || max_t < now) return;
-    dpi_timing[slot+1] = now;
+    if (!active) return;
+    if (errored || max_t < now) {
+      active = false;
+      return;
+    }
     if (pulse < 0) {
-      dpi_timing[slot+2] = now;
       if (pulse == -3) {
         if (next_t < now) {
-          pinMode(pin, INPUT);
-          pulse = 0;//-2;
-          dpi_timing[slot+3] = now;
+          pinMode(pin, INPUT_PULLUP);
+          pulse = -2;
+          dpi_timing[slot] = now;
           v_goal_hi = false;
           max_t = now;
           next_t = now;
@@ -247,68 +250,64 @@ struct DigitalPulses {
           max_t += MHZ*(70+50)*60;
         }
       }
-      else {
-        dpi_timing[slot+4] = now;
-        bool is_hi = (digitalRead(pin) == HIGH);
-        if (is_hi != v_goal_hi) {
-          next_t = now;
-          next_t += MHZ*60;
+      else if (pulse == -2) {
+        if (digitalRead(pin) == HIGH) {
+          if (next_t < now) {
+            pulse = -1;
+            next_t = now;
+            next_t += MHZ*40;
+          }
+          else {
+            next_t = now;
+            next_t += MHZ*20;
+          }
         }
-        else if (next_t < now) {
-          pulse += 1;
-          v_goal_hi = !v_goal_hi;
-          next_t = now;
-          next_t += (pulse < 0) ? MHZ*60 : MHZ*35;
+      }
+      else {
+        if (digitalRead(pin) == LOW) {
+          if (next_t < now) {
+            pulse = 0;
+            next_t = now;
+            next_t += MHZ*25;
+            v_goal_hi = true;
+          }
+          else {
+            next_t = now;
+            next_t += MHZ*40;
+          }
         }
       }
     }
     else {
-      dpi_timing[slot+5] = now;
-      bool is_hi = (digitalRead(pin) == HIGH);
-      if (is_hi != v_goal_hi) {
-        bits |= (((uint64_t)1) << pulse);
-        v_goal_hi = is_hi;
-        if (pulse >= 40) {
-          active = false;
-          dpi_buffer[slot] = bits;
-        }
-        else pulse += 1;
-      }
-      /*
-      if (!v_goal_hi) {
-        if (is_hi) {
-          next_t = now;
-          next_t += MHZ*35;
-        }
-        else if (next_t < now) {
-          v_goal_hi = true;
-          next_t = now;
-          next_t += MHZ*15;
-        }
-      }
-      else {
-        if (!is_hi) {
+      if (v_goal_hi) {
+        if (digitalRead(pin) == HIGH) {
           if (next_t < now) {
             v_goal_hi = false;
-            next_t += MHZ*40;
-            if (next_t < now) bits |= (((uint64_t)1) << pulse);
-            pulse += 1;
-            if (pulse >= 40) {
-              active = false;
-              dpi_buffer[slot] = bits;
-            }
-            else {
-              next_t = now;
-              next_t += MHZ*35;
-            }
+            next_t = now;
+            next_t += MHZ*45;
           }
           else {
             next_t = now;
-            next_t += MHZ*15;
+            next_t += MHZ*20;
           }
         }
       }
-      */
+      else {
+        if (digitalRead(pin) == LOW) {
+          if (next_t < now) {
+            bits |= (1ull << pulse);
+            dpi_buffer[slot] = bits;
+          }
+          next_t = now;
+          next_t += MHZ*20;
+          pulse += 1;
+          if (pulse >= 40) {
+            dpi_timing[slot] = now;
+            active = false;
+          }
+          else v_goal_hi = true;
+        }
+      }
     }
   }
 };
