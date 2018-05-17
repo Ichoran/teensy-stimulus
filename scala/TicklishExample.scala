@@ -7,7 +7,7 @@ object TicklishExample {
   def main(args: Array[String]) {
     if (args.length > 0) throw new Exception("Sorry, I don't understand any arguments.")
 
-    println("Hello!  We're going to find a Teensy 3.x board running Ticklish!")
+    println("Hello!  We're going to find a Teensy 3.x board running Ticklish 2.x!")
     val names = Ticklish.possibilities
     println
     println("We found ${names.length} ports: ${names.mkString(", ")}")

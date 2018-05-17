@@ -30,15 +30,26 @@ object TicklishUtil {
     val dpi = s.indexOf('.')
     if (dpi < 0) Duration.ofSeconds(s.toLong)
     else {
-      val sec = s.take(dpi)
+      val sec = s.substring(1, dpi)
       val rest = s.drop(dpi+1)
       if (rest.length <= 3) Duration.ofMillis(sec.toLong*1000 + rest.padTo(3, '0').toInt)
       else Duration.ofNanos(sec.toLong*1000000000 + rest.padTo(9, '0').toInt)
     }
   }
 
-  def decodeVoltage(s: String): Float = s.toFloat
-  def decodeState(s: String): TicklishState = TicklishState.charToState(s.head)
+  def decodeVoltage(s: String): Float = s.drop(1).toFloat
+  def decodeBitsTH(s: String): Option[(Float, Float)] =
+    if (s.length < 11) None
+    else {
+      import java.lang.Integer.parseInt
+      val humidity = parseInt(s.substring(1, 5), 16);
+      val temperature = parseInt(s.substring(5, 9), 16);
+      val checksum = parseInt(s.substring(9, 11), 16)
+      if ((((humidity & 0xFF) + (humidity >>> 8) + (temperature & 0xFF) | (temperature >>> 8)) & 0xFF) != checksum) None
+      else Some((temperature.toFloat, humidity.toFloat))
+    }
+
+  def decodeState(s: String): TicklishState = TicklishState.charToState(s.charAt(1))
 
   def encodeDrift(d: Double): String = {
     val ad = math.abs(d);
@@ -46,23 +57,23 @@ object TicklishUtil {
     else "%c%08d".format(if (d < 0) '-' else '+', math.round(1.0/ad).toInt)
   }
   def decodeDrift(s: String): Option[Double] =
-    if (s.length != 11) None
-    else if (s.charAt(0) != '^') None
+    if (s.length != 12) None
+    else if (s.charAt(1) != '^') None
     else try { 
-      val x = s.substring(2, 10).toDouble * (if (s.charAt(1) == '-') -1 else 1)
+      val x = s.substring(3, 11).toDouble * (if (s.charAt(1) == '-') -1 else 1)
       Some(if (x == 0) 0 else 1.0/x)
     }
     catch { case e if NonFatal(e) => None }
 
   def encodeName(name: String): String = f"IDENTITY$name"
   def decodeName(s: String): (String, String) =
-    if (isTicklish(s)) (s drop 12, s.substring(8,11))
+    if (isTicklish(s)) (s drop 12, s.substring(9,12))
     else throw new IllegalArgumentException("Unknown device type")
 
-  def isTicklish(s: String): Boolean = s.startsWith("Ticklish1.")
+  def isTicklish(s: String): Boolean = s.startsWith("$Ticklish2.")
 
-  def isTimeReport(s: String): Boolean = s.length == 15 && {
-    var i = 0
+  def isTimeReport(s: String): Boolean = s.length == 16 && {
+    var i = 1
     var hasDot = false
     while (i < s.length) {
       val c = s.charAt(i)

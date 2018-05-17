@@ -14,6 +14,10 @@ class Ticklish private[ticklish] (val portname: String) {
   private var myId: String = null
   private var myVersion: String = null
   private val received = new java.util.concurrent.LinkedBlockingDeque[ByteBuffer]
+  private var working: ByteBuffer = null
+  private val myUnderlying = new Array[Byte](64)
+  private val myBuffer = ByteBuffer.wrap(myUnderlying)
+  private var completed: Option[String] = None
   private var patience = 500
   private val patienceUnit = java.util.concurrent.TimeUnit.MILLISECONDS  // DO NOT change this!  `readBytes` is always milliseconds!
 
@@ -46,81 +50,84 @@ class Ticklish private[ticklish] (val portname: String) {
     myId = null
     received.clear
   }
-  
-  def nextBuffer() = {
+
+  def advanceLine(): Boolean =
     if (!isConnected) throw new Exception("Cannot read from a closed port")
-    val b = received.poll(patience, patienceUnit)
-    if (b eq null) throw new Exception(f"Answer not received within $patience ms")
-    b
-  }
-
-  def fixedRead(n: Int, twiddled: Boolean = false, read: String = ""): String =
-    if (n <= 0) read
     else {
-      val b = nextBuffer()
-      var twiddy = twiddled
-      while (!twiddy && b.hasRemaining) twiddy = (b.get == '~');
-      if (b.remaining > n) {
-        val rest = new Array[Byte](n)
-        b.get(rest)
-        received.push(b)
-        read + new String(rest, "ASCII")
+      val t0 = System.nanoTime/1000000L
+      var t1 = t0
+      var foundLF = false
+      while (t1 - t0 < patience && !foundLF && myBuffer.remaining > 0) {
+        if (working eq null) {
+          working = received.poll(patience - (t1 - t0), patienceUnit)
+          if (working eq null) { 
+            myBuffer.clear
+            completed = None
+            return false
+          }       
+        }
+        t1 = System.nanoTime/1000000L
+        while (working.hasRemaining && !foundLF) {
+          val b = working.get
+          if (b == '\n') {
+            foundLF = true
+            myBuffer.flip
+          }
+          else myBuffer.put(b)
+        }
+        if (!working.hasRemaining) working = null
       }
-      else {
-        val more = new Array[Byte](n)
-        val nextN = n - b.remaining
-        b.get(more)
-        fixedRead(nextN, twiddy, read + new String(more,"ASCII"))
+      if (foundLF) {
+        completed = Some(new String(myUnderlying, 0, myBuffer.remaining, "ASCII"));
+        myBuffer.clear
       }
+      else completed = None
+      foundLF
     }
 
-  def flexRead(dollared: Boolean = false, read: StringBuilder = new StringBuilder): String = {
-    val b = received.poll(patience, patienceUnit)
-    if (b eq null) throw new Exception(f"Answer not received within $patience ms")
-    var dolly = dollared
-    while (!dolly && b.hasRemaining) dolly = (b.get == '$');
-    var eol = false
-    while (!eol && b.hasRemaining) { val c = (b.get & 0xFF).toChar; eol = (c == '\n'); if (!eol) read += c }
-    if (!eol) flexRead(dolly, read)
-    else {
-      if (b.hasRemaining) received.push(b)
-      read.result
-    }
-  }
+  def currentLine(): Option[String] = completed
 
+  def read(): String = currentLine() match {
+    case Some(s) =>
+      completed = None
+      if (!s.startsWith("$") && !s.startsWith("~")) throw new Exception(s"String did not start with $$ or ~: $s")
+      s
+    case None =>
+      if (advanceLine()) read()
+      else throw new Exception(s"No complete string read within $patience ms")
+  }
+  
   def write(s: String) {
     if (!isConnected) throw new Exception("Cannot write to a closed port.")
-    port.writeString(s)
+    port.writeString(s + "\n")
   }
 
-  def query(s: String, n: Int) = { write(s); fixedRead(n) }
-
-  def flexQuery(s: String) = { write(s); flexRead() }
+  def query(s: String) = { write(s); read() }
 
   def isTicklish(): Boolean = 
     try { 
-      if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
-      TicklishUtil.isTicklish(cachedIdentity) 
+      if (cachedIdentity == null) cachedIdentity = query("~?")
+      TicklishUtil.isTicklish(cachedIdentity)
     } catch { case t if NonFatal(t) => false }
 
   def id(): String = {
-    if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
+    if (cachedIdentity == null) cachedIdentity = query("~?")
     if (myId == null) myId = TicklishUtil.decodeName(cachedIdentity)._1
     myId
   }
 
   def version(): String = {
-    if (cachedIdentity == null) cachedIdentity = flexQuery("~?")
+    if (cachedIdentity == null) cachedIdentity = query("~?")
     if (myVersion == null) myVersion = TicklishUtil.decodeName(cachedIdentity)._2
     myVersion
   }
 
-  def getDrift(): Double = TicklishUtil.decodeDrift(query("~^+00000000?", 11)).getOrElse(Double.NaN)
+  def getDrift(): Double = TicklishUtil.decodeDrift(query("~^+00000000?")).getOrElse(Double.NaN)
   def setDrift(error: Double, toEEPROM: Boolean = false): Option[Boolean] =
     if (isError) None
     else {
       try {
-        val ans = query("~^" + TicklishUtil.encodeDrift(error) + (if (toEEPROM) "!" else "."), 11)
+        val ans = query("~^" + TicklishUtil.encodeDrift(error) + (if (toEEPROM) "!" else "."))
         TicklishUtil.decodeDrift(ans).map(_ => ans.endsWith("!"))
       } catch { case e if NonFatal(e) => None }   
     }
@@ -135,13 +142,13 @@ class Ticklish private[ticklish] (val portname: String) {
       else if (math.abs(measured) < minimumError) Some(false)
       else setDrift(measured + already, toEEPROM)
     }
-  def zeroDrift(): Boolean = try { query("~^+00000000.", 11); true } catch { case t if NonFatal(t) => false  }
+  def zeroDrift(): Boolean = try { query("~^+00000000."); true } catch { case t if NonFatal(t) => false  }
 
-  def state(): TicklishState = TicklishUtil.decodeState(query("~@", 1))
+  def state(): TicklishState = TicklishUtil.decodeState(query("~@"))
 
-  def ping(): Boolean = try{ flexQuery("~'") == ""; true } catch { case t if NonFatal(t) => false }
+  def ping(): Boolean = try{ query("~'") == "$"; true } catch { case t if NonFatal(t) => false }
 
-  def clear() { write("~."); ping }
+  def clear() { write("~.") }
 
   def isError(): Boolean = try { state == TicklishState.Errored } catch { case t if NonFatal(t) => true }
   def isProg(): Boolean  = try { state == TicklishState.Program } catch { case t if NonFatal(t) => false }
@@ -151,7 +158,7 @@ class Ticklish private[ticklish] (val portname: String) {
   def timesync(): Ticklish.Timed = {
     val before = LocalDateTime.now
     val t0 = System.nanoTime
-    val ans = flexQuery("~#")
+    val ans = query("~#")
     val t1 = System.nanoTime
     if (!TicklishUtil.isTimeReport(ans)) throw new Exception(f"Run error instead of timing info: $ans")
     val current = TicklishUtil.decodeTime(ans)
@@ -161,12 +168,9 @@ class Ticklish private[ticklish] (val portname: String) {
 
   def set(channel: Char, dtl: Ticklish.Digital, following: Boolean) {
     if (channel < 'A' || channel > 'X') throw new Exception(f"Invalid channel: $channel")
-    if (following) {
-      write(f"~$channel&");
-      if (!ping) throw new Exception(f"Failed to add block to $channel")
-    }
+    if (following) write(f"~$channel&");
     write(f"~$channel${dtl.command}")
-    if (!ping) throw new Exception(f"Failed to set channel $channel")
+    if (isError()) throw new Exception(f"Failed to set channel $channel")
   }
 
   def set(channel: Char, dtl: Ticklish.Digital) { set(channel, dtl, false) }
@@ -187,12 +191,12 @@ class Ticklish private[ticklish] (val portname: String) {
     state match {
       case TicklishState.AllDone =>
         write("~\"")
-        if (!ping) throw new Exception("Would not refresh to run again")
+        if (!ping()) throw new Exception("Would not refresh to run again")
       case TicklishState.Program =>
       case x => throw new Exception(s"Cannot run because state is $x")
     }
     write("~*")
-    if (!ping) throw new Exception("Nonresponsive after issuing run command")
+    if (!ping()) throw new Exception("Nonresponsive after issuing run command")
     timesync()
   }
 
@@ -230,7 +234,8 @@ object Ticklish {
     val blocklow: Long,
     val pulsehigh: Long,
     val pulselow: Long,
-    val upright: Boolean = true
+    val upright: Boolean = true,
+    val pulseread: Boolean = false
   ) {
     val blockinterval = blockhigh + blocklow
     val pulseinterval = pulsehigh + pulselow
@@ -264,7 +269,8 @@ object Ticklish {
         d.blocklow == blocklow &&
         d.pulsehigh == pulsehigh &&
         d.pulselow == pulselow &&
-        d.upright == upright
+        d.upright == upright &&
+        d.pulseread == pulseread
       case _ => false
     }
     override def hashCode = {
@@ -323,7 +329,20 @@ object Ticklish {
       else if (totalus > MaxTime) None
       else Some(new Digital(totalus, delayus, highus, intervalus - highus, highus, intervalus - highus))
     }
-    def apply(delay: Double, interval: Double, count: Int, pulseinterval: Double, pulsehigh: Double, pulsecount: Int): Option[Digital] = {
+    def apply(delay: Double, interval: Double, high: Double, count: Int, invert: Boolean): Option[Digital] = {
+      val delayus = math.rint(delay*1e6).toLong
+      val intervalus = math.rint(interval*1e6).toLong
+      val highus = math.rint(high*1e6).toLong
+      val totalus = delayus + (if (count > 0) highus + intervalus*(count - 1) else 0)
+      if (delay.isNaN || interval.isNaN || high.isNaN) None
+      else if (delayus < 0 || delayus > MaxTime) None
+      else if (intervalus < 2 || intervalus > MaxTime) None
+      else if (highus < 1 || highus >= intervalus || intervalus/(intervalus-highus) >= 1000000) None
+      else if (count < 0 || (count == 0 && delayus == 0)) None
+      else if (totalus > MaxTime) None
+      else Some(new Digital(totalus, delayus, highus, intervalus - highus, highus, intervalus - highus, !invert))
+    }
+    def apply(delay: Double, interval: Double, count: Int, pulseinterval: Double, pulsehigh: Double, pulsecount: Int, invert: Boolean = false): Option[Digital] = {
       val dus = math.rint(delay*1e6).toLong
       val intus = math.rint(interval*1e6).toLong
       val pintus = math.rint(pulseinterval*1e6).toLong
@@ -339,7 +358,20 @@ object Ticklish {
       else if (phus < 1 || phus >= pintus || phus/(intus-phus) >= 1000000) None
       else if (count > 0 && pulsecount < 1) None
       else if (totalus > MaxTime) None
-      else Some(new Digital(totalus, dus, hus, intus - hus, phus, pintus - phus))
+      else Some(new Digital(totalus, dus, hus, intus - hus, phus, pintus - phus, !invert))
+    }
+    def pulseRead(delay: Double, interval: Double, count: Int): Option[Digital] = {
+      val delayus = math.rint(delay*1e6).toLong
+      val intervalus = math.rint(interval*1e6).toLong
+      val highus = 2000000L
+      val totalus = delayus + (if (count > 0) highus + intervalus*(count - 1) else 0)
+      if (delay.isNaN || interval.isNaN ) None
+      else if (delayus < 0 || delayus > MaxTime) None
+      else if (intervalus < 2 || intervalus > MaxTime) None
+      else if (highus < 1 || highus >= intervalus || intervalus/(intervalus-highus) >= 1000000) None
+      else if (count < 0 || (count == 0 && delayus == 0)) None
+      else if (totalus > MaxTime) None
+      else Some(new Digital(totalus, delayus, highus, intervalus - highus, highus, intervalus - highus, true, true))
     }
   }
 }

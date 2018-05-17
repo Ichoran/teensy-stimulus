@@ -1137,10 +1137,22 @@ void process_channel_status_command(byte ch) {
 
 void process_channel_read_command(byte ch) {
   msg[0] = '$';
-  snprintf((char*)msg+1, 12, "%010llX", dpi_buffer[ch - 'A']);
-  msg[11] = '\n';
-  msg[12] = 0;
-  Serial.write(msg, 12);
+  int i = 1;
+  for (int j = 0; j < 40; j += 8) {
+    byte v = (byte)((dpi_buffer[ch - 'A'] >> j) & 0xFF);
+    // Need to reverse bits!
+    v = ((v & 0xF0) >> 4) | ((v & 0x0F) << 4);
+    v = ((v & 0xCC) >> 2) | ((v & 0x33) << 2);
+    v = ((v & 0xAA) >> 1) | ((v & 0x55) << 1);
+    // Manually compute hexidecimal code.
+    msg[i] = (v >= 160) ? ('A' + ((v >> 4) - 10)) : ('0' + (v >> 4));
+    v = v & 0xF;
+    msg[i+1] = (v >= 10) ? ('A' + v - 10) : ('0' + v);
+    i += 2;
+  }
+  msg[i] = '\n';
+  msg[i+1] = 0;
+  Serial.write(msg, i+1);
   Serial.send_now();
 }
 
