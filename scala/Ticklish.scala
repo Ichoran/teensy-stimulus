@@ -166,8 +166,34 @@ class Ticklish private[ticklish] (val portname: String) {
     Ticklish.Timed(before minus current, Duration.ofNanos(t1 - t0), t0, current)
   }
 
+  def getLogic(): Option[Boolean] =
+    if (channel >= 'X') None
+    else {
+      try { Some(TicklishUtil.decodeVoltage(query(f"~$channel?")) > 2) }
+      catch { case _: Exception => None }
+    }
+
+  def getVoltage(): Option[Float] =
+    if (channel >= 'K') None
+    else {
+      try { Some(TicklishUtil.decodeVoltage(query(f"~$channel?"))) }
+      catch { case _: Exception => None }
+    }
+
+  def getTempCHumidPct(): Option[(Float, Float)] =
+    if (channel < 'K' || channel > 'W') None
+    else {
+      try {
+        TicklishUtil.decodeBitsTH(query(f"~$channel|?")).filter{ _ =>
+          TicklishUtil.decodeTime(query(f"~$channel|#")).compareTo(Duration.ZERO) > 0
+        }
+      }
+      catch { case _: Exception => None }
+    }
+
   def set(channel: Char, dtl: Ticklish.Digital, following: Boolean) {
     if (channel < 'A' || channel > 'X') throw new Exception(f"Invalid channel: $channel")
+    if (dtl.pulseread && (channel < 'K' || channel > 'W')) throw new Exception(f"Invalid channel for pulse read: $channel")
     if (following) write(f"~$channel&");
     write(f"~$channel${dtl.command}")
     if (isError()) throw new Exception(f"Failed to set channel $channel")

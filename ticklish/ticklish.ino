@@ -226,6 +226,7 @@ struct DigitalPulses {
     pinMode(pin, OUTPUT);
     digitalWrite(pin, LOW);
     dpi_buffer[slot] = 0;
+    dpi_timing[slot] = now;
     next_t += MHZ*1200;
     max_t = next_t;
     max_t += MHZ*6800;  // Whole protocol should complete within 8 ms.  Actually less: readout is < 5 ms.
@@ -376,6 +377,7 @@ struct Protocol {
     x.parse(input + 4*9, 8); if (!x.is_valid()) return 5; p = x;
     x.parse(input + 5*9, 8); if (!x.is_valid()) return 6; q = x;
     if (input[6*9-1] == 'i') i = 'i'; else if (input[6*9-1] == 'u') i = 'u'; else return 7;
+    j = ' ';
     return 0;
   }
 
@@ -1249,8 +1251,8 @@ void process_init_command() {
       case '=':
       case ':':
         if (bufi < 57) return;
-        if (ch == 'Z') {
-          error_with_message("Cannot set all on channel Z: ", (char*)buf, 12);
+        if (ch >= 'Y') {
+          error_with_message("Cannot set all on channel Y or Z: ", (char*)buf, 12);
         }
         else {
           int err = process_ensure_protocol(ch)->parse_all(buf+3);
@@ -1321,8 +1323,8 @@ void process_runtime_command() {
       case '/': process_stop_running(ch); break;
       case '?': process_say_the_voltage(ch); break;
       case '|':
-        if      (bufi == 4 && buf[3] == '?') process_channel_read_command(b);
-        else if (bufi == 4 && buf[3] == '#') process_channel_time_command(b);
+        if      (bufi == 4 && buf[3] == '?') process_channel_read_command(ch);
+        else if (bufi == 4 && buf[3] == '#') process_channel_time_command(ch);
         else {
           error_with_message("Digital pulse command while running that isn't read: ", (char*)buf, 4);
         }

@@ -284,10 +284,11 @@ replaced by `Ticklish1.0 ` (with a space); see the `~?` command.
 | Set pulse off time    | `q` | 8 chars: duration | None    | Digital channels only. |
 | Set period            | `w` | 8 chars: duration | None    | Analog channels only.  Minimum period 1 ms. |
 | Set amplitude         | `a` | 4 chars: ampl.    | None    | Analog channels only.  Values from 0 to 2047. |
-| Set full protocol     | `=` | 54 chars: 6x8 +etc| None    | Digital channels only. |
+| Set full protocol     | `=` | 54 chars: 6x8 +etc| None    | Digital channels only.  Clears pulse reading. |
 | Set and run protocol  | `:` | 54 chars: as `=`  | None    | Clears all other protocols. |
 | Read digital pulses   | `|` | `<` or `>`        | None    | `<` means actually read them (`>` is output like normal) |
 | Query stored pulses   | `|` | `?`               | `$02468ace13` | Bits read as pulses |
+| Query time of pulses  | `|` | `#`               | `$01234567.012345` | Standard time format (seconds) |
 
 ### Allowed Commands by State
 
