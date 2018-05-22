@@ -166,21 +166,21 @@ class Ticklish private[ticklish] (val portname: String) {
     Ticklish.Timed(before minus current, Duration.ofNanos(t1 - t0), t0, current)
   }
 
-  def getLogic(): Option[Boolean] =
+  def getLogic(channel: Char): Option[Boolean] =
     if (channel >= 'X') None
     else {
       try { Some(TicklishUtil.decodeVoltage(query(f"~$channel?")) > 2) }
       catch { case _: Exception => None }
     }
 
-  def getVoltage(): Option[Float] =
+  def getVoltage(channel: Char): Option[Float] =
     if (channel >= 'K') None
     else {
       try { Some(TicklishUtil.decodeVoltage(query(f"~$channel?"))) }
       catch { case _: Exception => None }
     }
 
-  def getTempCHumidPct(): Option[(Float, Float)] =
+  def getTempCHumidPct(channel: Char): Option[(Float, Float)] =
     if (channel < 'K' || channel > 'W') None
     else {
       try {
