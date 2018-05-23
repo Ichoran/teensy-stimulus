@@ -5,8 +5,9 @@ delivery software for the Teensy 3.0 board.
 
 ## Requirements
 
-You must have Java 1.8 and SBT installed.  SBT will take care of handling
-dependencies (which are Scala 2.12 and JSSC 2.8).
+You must have Java 1.8 and [Mill](http://www.lihaoyi.com/mill/index.html)
+installed.  Mill will take care of handling dependencies
+(which are Scala 2.12 and JSSC 2.8).
 
 If you want to just use Java, use the Scala interface.  You may need to
 write a few wrappers.
@@ -14,7 +15,10 @@ write a few wrappers.
 ## Usage
 
 The source here is intended to be used as a template, not as a module to
-be called.
+be called, though you can get pretty far by using the `write` and query`
+methods on a `Ticklish` object.
+
+Check out `TicklishExample` for uses.
 
 There are a few utility methods provided in the `TicklishUtil` object for
 encoding and decoding requests and responses.
