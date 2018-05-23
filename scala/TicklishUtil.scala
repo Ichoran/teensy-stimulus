@@ -6,10 +6,10 @@ import scala.util.control.NonFatal
 
 sealed trait TicklishState { def indicator: Char }
 object TicklishState {
-  object Running extends TicklishState { def indicator = '*' }
-  object Errored extends TicklishState { def indicator = '!' }
-  object AllDone extends TicklishState { def indicator = '/' }
-  object Program extends TicklishState { def indicator = '.' }
+  object Running extends TicklishState { def indicator = '*'; override def toString = "running" }
+  object Errored extends TicklishState { def indicator = '!'; override def toString = "error" }
+  object AllDone extends TicklishState { def indicator = '/'; override def toString = "finished" }
+  object Program extends TicklishState { def indicator = '.'; override def toString = "ready" }
   val allStates = Vector(Running, Errored, AllDone, Program)
   val charToState = allStates.map(x => x.indicator -> x).toMap
 }
@@ -46,7 +46,7 @@ object TicklishUtil {
       val temperature = parseInt(s.substring(5, 9), 16);
       val checksum = parseInt(s.substring(9, 11), 16)
       if ((((humidity & 0xFF) + (humidity >>> 8) + (temperature & 0xFF) | (temperature >>> 8)) & 0xFF) != checksum) None
-      else Some((temperature.toFloat, humidity.toFloat))
+      else Some((temperature.toFloat/10, humidity.toFloat/10))
     }
 
   def decodeState(s: String): TicklishState = TicklishState.charToState(s.charAt(1))
@@ -67,7 +67,7 @@ object TicklishUtil {
 
   def encodeName(name: String): String = f"IDENTITY$name"
   def decodeName(s: String): (String, String) =
-    if (isTicklish(s)) (s drop 12, s.substring(9,12))
+    if (isTicklish(s)) (s drop 13, s.substring(9,12))
     else throw new IllegalArgumentException("Unknown device type")
 
   def isTicklish(s: String): Boolean = s.startsWith("$Ticklish2.")
